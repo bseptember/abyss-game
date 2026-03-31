@@ -27,7 +27,7 @@ const GATE_MIN_GAP = Math.PI * 0.26;      // ~47° opening
 const GATE_GAP_SHRINK = 0.005;
 const GATE_FIRST_Z = 140;  // First gate distance — gives time to orient
 
-const GATE_INNER_R = 1.3;                 // Safe center hole
+const GATE_INNER_R = 0;                   // No center safe zone
 
 const PLAYER_RADIUS = 0.4;
 const PLAYER_MAX_R = 8.5;
@@ -225,41 +225,120 @@ function fillGate(group: THREE.Group, gapSize: number, color: THREE.Color) {
 
   const barrierLen = TAU - gapSize;
 
-  // Force-field concentric ring arcs (barrier)
-  for (let r = GATE_INNER_R; r <= TUNNEL_RADIUS; r += 1.3) {
-    const geo = new THREE.TorusGeometry(r, 0.04, 6, 48, barrierLen);
+  // Force-field concentric ring arcs (barrier) — thick and bright
+  for (let r = 0.5; r <= TUNNEL_RADIUS; r += 0.9) {
+    const geo = new THREE.TorusGeometry(r, 0.08, 8, 48, barrierLen);
     const mat = new THREE.MeshBasicMaterial({
       color,
       transparent: true,
-      opacity: 0.55,
+      opacity: 0.8,
     });
     const mesh = new THREE.Mesh(geo, mat);
-    mesh.rotation.z = gapSize / 2; // start barrier after half-gap
+    mesh.rotation.z = gapSize / 2;
     group.add(mesh);
   }
 
-  // Subtle fill disc behind rings
-  const discGeo = new THREE.RingGeometry(GATE_INNER_R, TUNNEL_RADIUS, 64, 1, gapSize / 2, barrierLen);
+  // Solid fill disc behind rings — very visible
+  const discGeo = new THREE.RingGeometry(0.01, TUNNEL_RADIUS, 64, 1, gapSize / 2, barrierLen);
   const discMat = new THREE.MeshBasicMaterial({
     color,
     side: THREE.DoubleSide,
     transparent: true,
-    opacity: 0.1,
+    opacity: 0.25,
   });
   group.add(new THREE.Mesh(discGeo, discMat));
 
-  // Bright gap-edge arcs (white — bloom will make these glow hard)
-  const arcOuter = new THREE.TorusGeometry(TUNNEL_RADIUS * 0.9, 0.07, 6, 32, gapSize);
-  const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-  const outerArc = new THREE.Mesh(arcOuter, whiteMat);
-  outerArc.rotation.z = -gapSize / 2;
-  group.add(outerArc);
+  // Radial spokes across the barrier for extra visibility
+  const spokeCount = Math.floor(barrierLen / 0.4);
+  for (let s = 0; s < spokeCount; s++) {
+    const angle = gapSize / 2 + (s / spokeCount) * barrierLen;
+    const spokeGeo = new THREE.CylinderGeometry(0.03, 0.03, TUNNEL_RADIUS, 4);
+    const spokeMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.4 });
+    const spoke = new THREE.Mesh(spokeGeo, spokeMat);
+    spoke.rotation.z = angle;
+    spoke.position.set(
+      Math.cos(angle) * TUNNEL_RADIUS * 0.5,
+      Math.sin(angle) * TUNNEL_RADIUS * 0.5,
+      0,
+    );
+    group.add(spoke);
+  }
 
-  const arcInner = new THREE.TorusGeometry(GATE_INNER_R + 0.3, 0.05, 6, 24, gapSize);
-  const innerMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 });
-  const innerArc = new THREE.Mesh(arcInner, innerMat);
-  innerArc.rotation.z = -gapSize / 2;
-  group.add(innerArc);
+  // Bright gap-edge arcs — glow markers showing where the opening is
+  for (const edgeR of [TUNNEL_RADIUS * 0.95, TUNNEL_RADIUS * 0.6, TUNNEL_RADIUS * 0.3]) {
+    const arcGeo = new THREE.TorusGeometry(edgeR, 0.1, 8, 32, gapSize);
+    const arcMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const arc = new THREE.Mesh(arcGeo, arcMat);
+    arc.rotation.z = -gapSize / 2;
+    group.add(arc);
+  }
+}
+
+// ─── Leaderboard ───────────────────────────────────────────
+
+interface LeaderboardEntry {
+  score: number;
+  depth: number;
+  date: string;
+}
+
+const LB_KEY = 'abyss-leaderboard';
+const LB_MAX = 10;
+
+function getLeaderboard(): LeaderboardEntry[] {
+  try {
+    const raw = localStorage.getItem(LB_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.slice(0, LB_MAX);
+  } catch { return []; }
+}
+
+function addToLeaderboard(score: number, depth: number): number {
+  const entries = getLeaderboard();
+  const entry: LeaderboardEntry = {
+    score,
+    depth: Math.floor(depth),
+    date: new Date().toLocaleDateString(),
+  };
+  entries.push(entry);
+  entries.sort((a, b) => b.score - a.score);
+  const trimmed = entries.slice(0, LB_MAX);
+  localStorage.setItem(LB_KEY, JSON.stringify(trimmed));
+  // Return the rank (0-indexed) of this entry
+  return trimmed.findIndex(e => e === entry);
+}
+
+function renderLeaderboard(listEl: HTMLOListElement, currentScore: number) {
+  const entries = getLeaderboard();
+  listEl.innerHTML = '';
+
+  if (entries.length === 0) {
+    listEl.innerHTML = '<li style="justify-content:center;color:rgba(255,255,255,0.2)">No runs yet</li>';
+    return;
+  }
+
+  const medals = ['lb-gold', 'lb-silver', 'lb-bronze'];
+
+  entries.forEach((entry, i) => {
+    const li = document.createElement('li');
+
+    // Highlight current run
+    if (entry.score === currentScore) {
+      li.classList.add('lb-current');
+    }
+    if (i < 3) {
+      li.classList.add(medals[i]);
+    }
+
+    li.innerHTML = `
+      <span class="lb-rank">#${i + 1}</span>
+      <span class="lb-score">${entry.score}</span>
+      <span class="lb-depth">${entry.depth}m</span>
+    `;
+    listEl.appendChild(li);
+  });
 }
 
 // ─── UI Manager ────────────────────────────────────────────
@@ -275,6 +354,7 @@ class UI {
   private startBtn = document.getElementById('start-btn')!;
   private retryBtn = document.getElementById('retry-btn')!;
   private tutorialEl = document.getElementById('tutorial')!;
+  private leaderboardList = document.getElementById('leaderboard-list') as HTMLOListElement;
   private tutorialTimer = 0;
 
   onStart: (() => void) | null = null;
@@ -318,11 +398,13 @@ class UI {
     }, 4000);
   }
 
-  showGameOver(score: number, best: number) {
+  showGameOver(score: number, best: number, depth: number) {
     this.hud.classList.add('hidden');
     this.gameOver.classList.remove('hidden');
     this.finalScoreEl.textContent = String(score);
     this.bestScoreEl.textContent = `BEST: ${best}`;
+    addToLeaderboard(score, depth);
+    renderLeaderboard(this.leaderboardList, score);
   }
 
   updateScore(score: number) {
@@ -660,11 +742,12 @@ class AbyssGame {
 
     // Resume ambient rendering so scene doesn't freeze
     this.started = false;
+    this.ambientStart = 0;  // Reset so ambient positions tunnel correctly
     this.renderAmbient();
 
     // Brief delay before showing game over
     setTimeout(() => {
-      this.ui.showGameOver(this.score, this.bestScore);
+      this.ui.showGameOver(this.score, this.bestScore, this.depth);
     }, 600);
   }
 
@@ -799,11 +882,9 @@ class AbyssGame {
         while (diff > Math.PI) diff -= TAU;
         while (diff < -Math.PI) diff += TAU;
 
-        const pDist = Math.sqrt(this.playerX ** 2 + this.playerY ** 2);
         const inGap = Math.abs(diff) < gate.gapSize / 2;
-        const inCenter = pDist < GATE_INNER_R - PLAYER_RADIUS;
 
-        if (inGap || inCenter) {
+        if (inGap) {
           // Passed safely!
           gate.passed = true;
           gate.flashTimer = 0.3;
@@ -814,11 +895,9 @@ class AbyssGame {
           this.gapSize = Math.max(this.gapSize - GATE_GAP_SHRINK, GATE_MIN_GAP);
 
           // Near-miss screen shake
-          if (!inCenter) {
-            const closeness = 1 - Math.abs(diff) / (gate.gapSize / 2);
-            if (closeness > 0.6) {
-              this.shakeAmount = closeness * 0.8;
-            }
+          const closeness = 1 - Math.abs(diff) / (gate.gapSize / 2);
+          if (closeness > 0.6) {
+            this.shakeAmount = closeness * 0.8;
           }
         } else {
           // Hit!
@@ -887,16 +966,25 @@ class AbyssGame {
 
   // ─── Ambient (Pre-game) ──────────────
 
-  private renderAmbient() {
-    const now = performance.now() / 1000;
+  private ambientStart = 0;
 
-    // Slow drift through tunnel
-    this.cameraZ = now * 5;
+  private renderAmbient() {
+    if (this.ambientStart === 0) this.ambientStart = performance.now();
+    const elapsed = (performance.now() - this.ambientStart) / 1000;
+
+    // Reset tunnel to start so it's always visible
+    this.cameraZ = elapsed * 5;
     this.camera.position.z = this.cameraZ;
 
+    // Re-position tunnel rings around the camera
+    const ringStart = Math.floor(this.cameraZ / RING_SPACING) * RING_SPACING;
+    for (let i = 0; i < this.tunnelRings.length; i++) {
+      this.tunnelRings[i].position.z = ringStart + i * RING_SPACING;
+    }
+
     // Gentle orbit
-    this.camera.position.x = Math.sin(now * 0.3) * 3;
-    this.camera.position.y = Math.cos(now * 0.4) * 2;
+    this.camera.position.x = Math.sin(elapsed * 0.3) * 3;
+    this.camera.position.y = Math.cos(elapsed * 0.4) * 2;
 
     // Hide gates during ambient
     for (const g of this.gates) g.group.visible = false;
@@ -904,8 +992,13 @@ class AbyssGame {
     // Hide player
     this.playerMesh.visible = false;
 
-    // Recycle tunnel rings
-    this.recycleTunnel(lerpPalette(Math.sin(now * 0.1) * 0.5 + 0.5));
+    // Color tunnel rings
+    const ambientColor = lerpPalette(Math.sin(elapsed * 0.1) * 0.5 + 0.5);
+    for (const ring of this.tunnelRings) {
+      const mat = ring.material as THREE.MeshBasicMaterial;
+      mat.color.copy(ambientColor);
+      mat.opacity = 0.25 + 0.15 * Math.sin(ring.position.z * 0.1);
+    }
 
     // Move starfield
     this.starfield.position.z = this.cameraZ;

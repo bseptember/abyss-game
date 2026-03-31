@@ -262,7 +262,84 @@ html, body {
   font-weight: 400;
   color: rgba(255, 255, 255, 0.35);
   letter-spacing: 0.15em;
-  margin-bottom: 3rem;
+  margin-bottom: 1.5rem;
+}
+
+/* ─── Leaderboard ───────────────────── */
+
+#leaderboard {
+  width: min(320px, 85vw);
+  margin-bottom: 2rem;
+}
+
+#leaderboard h2 {
+  font-family: 'Orbitron', sans-serif;
+  font-size: clamp(0.55rem, 1.2vw, 0.7rem);
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.3);
+  letter-spacing: 0.25em;
+  text-align: center;
+  margin-bottom: 0.8rem;
+}
+
+#leaderboard-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+#leaderboard-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.35rem 0.8rem;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-family: 'Orbitron', sans-serif;
+  font-size: clamp(0.6rem, 1.1vw, 0.75rem);
+  color: rgba(255, 255, 255, 0.45);
+  letter-spacing: 0.08em;
+}
+
+#leaderboard-list li .lb-rank {
+  color: rgba(255, 255, 255, 0.2);
+  font-weight: 400;
+  min-width: 2rem;
+}
+
+#leaderboard-list li .lb-score {
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+#leaderboard-list li .lb-depth {
+  color: rgba(255, 255, 255, 0.2);
+  font-size: 0.65em;
+}
+
+#leaderboard-list li.lb-current {
+  background: rgba(0, 229, 255, 0.08);
+  border-color: rgba(0, 229, 255, 0.25);
+}
+
+#leaderboard-list li.lb-current .lb-score {
+  color: #00e5ff;
+  text-shadow: 0 0 8px rgba(0, 229, 255, 0.4);
+}
+
+#leaderboard-list li.lb-gold .lb-rank {
+  color: #fbbf24;
+}
+
+#leaderboard-list li.lb-silver .lb-rank {
+  color: #94a3b8;
+}
+
+#leaderboard-list li.lb-bronze .lb-rank {
+  color: #cd7f32;
 }
 
 #game-over button {
