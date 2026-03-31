@@ -17,14 +17,24 @@
     <div id="start-screen">
       <h1>ABYSS</h1>
       <p class="subtitle">Navigate the void. Survive the descent.</p>
+      <div class="how-to-play">
+        <p>Steer through the <span class="hl-cyan">glowing gaps</span> in each barrier</p>
+        <p class="controls-detail">Mouse / Touch to aim &nbsp;&bull;&nbsp; WASD / Arrows to steer</p>
+      </div>
       <button id="start-btn">ENTER THE ABYSS</button>
-      <p class="controls-hint">Mouse / Touch to steer</p>
+      <p class="controls-hint">Press SPACE or click to begin</p>
     </div>
 
     <!-- HUD -->
     <div id="hud" class="hidden">
-      <div id="score">0</div>
-      <div id="depth">DEPTH 0m</div>
+      <div id="hud-top">
+        <div id="score">0</div>
+        <div id="depth">DEPTH 0m</div>
+      </div>
+      <div id="tutorial" class="hidden">
+        <p>Aim for the <span class="hl-cyan">bright gaps</span> in the barriers</p>
+        <p class="tutorial-sub">Move your mouse / finger to steer</p>
+      </div>
     </div>
 
     <!-- Game Over -->

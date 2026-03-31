@@ -25,6 +25,8 @@ const GATE_SPACING = 30;
 const GATE_INITIAL_GAP = Math.PI * 0.9;   // ~162° opening
 const GATE_MIN_GAP = Math.PI * 0.26;      // ~47° opening
 const GATE_GAP_SHRINK = 0.005;
+const GATE_FIRST_Z = 140;  // First gate distance — gives time to orient
+
 const GATE_INNER_R = 1.3;                 // Safe center hole
 
 const PLAYER_RADIUS = 0.4;
@@ -34,9 +36,9 @@ const PLAYER_SMOOTH = 6;
 const TRAIL_COUNT = 500;
 const STAR_COUNT = 3000;
 
-const SPEED_INIT = 28;
+const SPEED_INIT = 18;
 const SPEED_MAX = 130;
-const SPEED_ACCEL = 0.35;
+const SPEED_ACCEL = 0.45;
 
 // ─── Color Palette ─────────────────────────────────────────
 
@@ -272,6 +274,8 @@ class UI {
   private bestScoreEl = document.getElementById('best-score')!;
   private startBtn = document.getElementById('start-btn')!;
   private retryBtn = document.getElementById('retry-btn')!;
+  private tutorialEl = document.getElementById('tutorial')!;
+  private tutorialTimer = 0;
 
   onStart: (() => void) | null = null;
   onRetry: (() => void) | null = null;
@@ -279,6 +283,19 @@ class UI {
   constructor() {
     this.startBtn.addEventListener('click', () => this.onStart?.());
     this.retryBtn.addEventListener('click', () => this.onRetry?.());
+
+    // Space / Enter to start or retry
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' || e.code === 'Enter') {
+        if (!this.startScreen.classList.contains('hidden')) {
+          e.preventDefault();
+          this.onStart?.();
+        } else if (!this.gameOver.classList.contains('hidden')) {
+          e.preventDefault();
+          this.onRetry?.();
+        }
+      }
+    });
   }
 
   showStart() {
@@ -291,6 +308,14 @@ class UI {
     this.startScreen.classList.add('hidden');
     this.hud.classList.remove('hidden');
     this.gameOver.classList.add('hidden');
+  }
+
+  showTutorial() {
+    this.tutorialEl.classList.remove('hidden');
+    clearTimeout(this.tutorialTimer);
+    this.tutorialTimer = window.setTimeout(() => {
+      this.tutorialEl.classList.add('hidden');
+    }, 4000);
   }
 
   showGameOver(score: number, best: number) {
@@ -446,7 +471,7 @@ class AbyssGame {
     for (let i = 0; i < GATE_POOL; i++) {
       const group = new THREE.Group();
       fillGate(group, GATE_INITIAL_GAP, col);
-      group.position.z = 60 + i * GATE_SPACING;
+      group.position.z = GATE_FIRST_Z + i * GATE_SPACING;
       group.rotation.z = Math.random() * TAU;
       group.visible = false;
       this.scene.add(group);
@@ -592,7 +617,7 @@ class AbyssGame {
     const col = lerpPalette(0);
     for (let i = 0; i < this.gates.length; i++) {
       const g = this.gates[i];
-      g.z = 60 + i * GATE_SPACING;
+      g.z = GATE_FIRST_Z + i * GATE_SPACING;
       g.group.position.z = g.z;
       g.group.rotation.z = Math.random() * TAU;
       g.gapAngle = g.group.rotation.z;
@@ -614,6 +639,7 @@ class AbyssGame {
 
     cancelAnimationFrame(this.ambientRaf);
     this.ui.showHUD();
+    this.ui.showTutorial();
     this.ui.updateScore(0);
     this.ui.updateDepth(0);
 
@@ -631,6 +657,10 @@ class AbyssGame {
       this.bestScore = this.score;
       localStorage.setItem('abyss-best', String(this.bestScore));
     }
+
+    // Resume ambient rendering so scene doesn't freeze
+    this.started = false;
+    this.renderAmbient();
 
     // Brief delay before showing game over
     setTimeout(() => {
