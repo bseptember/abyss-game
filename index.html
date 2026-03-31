@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>ABYSS — Infinite Descent</title>
+  <meta name="description" content="Navigate the void. Survive the descent. A WebGL browser game." />
+  <meta name="theme-color" content="#000008" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <!-- UI Overlay -->
+  <div id="ui">
+    <!-- Start Screen -->
+    <div id="start-screen">
+      <h1>ABYSS</h1>
+      <p class="subtitle">Navigate the void. Survive the descent.</p>
+      <button id="start-btn">ENTER THE ABYSS</button>
+      <p class="controls-hint">Mouse / Touch to steer</p>
+    </div>
+
+    <!-- HUD -->
+    <div id="hud" class="hidden">
+      <div id="score">0</div>
+      <div id="depth">DEPTH 0m</div>
+    </div>
+
+    <!-- Game Over -->
+    <div id="game-over" class="hidden">
+      <h1>SHATTERED</h1>
+      <div id="final-score">0</div>
+      <div id="best-score">BEST: 0</div>
+      <button id="retry-btn">DESCEND AGAIN</button>
+    </div>
+  </div>
+
+  <canvas id="game-canvas"></canvas>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
