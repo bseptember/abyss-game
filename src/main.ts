@@ -374,7 +374,10 @@ class UI {
 
   constructor() {
     this.startBtn.addEventListener('click', () => this.onStart?.());
-    this.retryBtn.addEventListener('click', () => this.onRetry?.());
+    this.retryBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.onRetry?.();
+    });
 
     // Click anywhere on game-over overlay to retry
     this.gameOver.addEventListener('click', () => this.onRetry?.());
@@ -473,6 +476,8 @@ class AbyssGame {
   private shakeAmount = 0;
   private lastTime = 0;
   private ambientRaf = 0;
+  private gameRaf = 0;
+  private deathTimeout = 0;
 
   // Input
   private pointerX = 0.5;
@@ -676,6 +681,11 @@ class AbyssGame {
   // ─── Game Flow ───────────────────────
 
   start() {
+    // Cancel any pending death timeout and stale animation frames
+    clearTimeout(this.deathTimeout);
+    cancelAnimationFrame(this.gameRaf);
+    cancelAnimationFrame(this.ambientRaf);
+
     this.audio.resume();
     this.audio.startDrone();
 
@@ -734,7 +744,6 @@ class AbyssGame {
     // Show player (hidden during ambient)
     this.playerMesh.visible = true;
 
-    cancelAnimationFrame(this.ambientRaf);
     this.ui.showHUD();
     this.ui.showTutorial();
     this.ui.updateScore(0);
@@ -749,20 +758,31 @@ class AbyssGame {
     this.audio.playDeath();
     this.audio.stopDrone();
 
+    // Cancel the game loop frame
+    cancelAnimationFrame(this.gameRaf);
+
     // Update best score
     if (this.score > this.bestScore) {
       this.bestScore = this.score;
       localStorage.setItem('abyss-best', String(this.bestScore));
     }
 
+    // Capture score/depth before any state changes
+    const finalScore = this.score;
+    const finalBest = this.bestScore;
+    const finalDepth = this.depth;
+
     // Resume ambient rendering so scene doesn't freeze
     this.started = false;
     this.ambientStart = 0;  // Reset so ambient positions tunnel correctly
     this.renderAmbient();
 
-    // Brief delay before showing game over
-    setTimeout(() => {
-      this.ui.showGameOver(this.score, this.bestScore, this.depth);
+    // Brief delay before showing game over — guarded against stale timeout
+    clearTimeout(this.deathTimeout);
+    this.deathTimeout = window.setTimeout(() => {
+      if (!this.alive) {
+        this.ui.showGameOver(finalScore, finalBest, finalDepth);
+      }
     }, 600);
   }
 
@@ -783,7 +803,7 @@ class AbyssGame {
     this.update(dt);
     this.render();
 
-    requestAnimationFrame(() => this.gameLoop());
+    this.gameRaf = requestAnimationFrame(() => this.gameLoop());
   }
 
   private update(dt: number) {
