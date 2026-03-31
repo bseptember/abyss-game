@@ -2,6 +2,11 @@
 
 ABYSS is a fast, procedural tunnel-runner built with Three.js and Vite.
 
+[![Deploy to GitHub Pages](https://github.com/bseptember/abyss-game/actions/workflows/pages.yml/badge.svg)](https://github.com/bseptember/abyss-game/actions/workflows/pages.yml)
+
+[![Play Now on Vercel](https://img.shields.io/badge/Play%20Now-Vercel-111111?style=for-the-badge&logo=vercel)](https://abyss-game-blond.vercel.app)
+[![Play Now on GitHub Pages](https://img.shields.io/badge/Play%20Now-GitHub%20Pages-222222?style=for-the-badge&logo=github)](https://bseptember.github.io/abyss-game/)
+
 ## Live Links
 
 - Vercel (primary): https://abyss-game-blond.vercel.app
