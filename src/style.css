@@ -172,6 +172,16 @@ html, body {
   text-shadow: 0 0 10px rgba(0, 229, 255, 0.4);
 }
 
+.hl-red {
+  color: #ff2244;
+  text-shadow: 0 0 10px rgba(255, 34, 68, 0.5);
+}
+
+.hl-green {
+  color: #00ff88;
+  text-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
+}
+
 /* ─── HUD ───────────────────────────── */
 
 #hud {
@@ -222,11 +232,13 @@ html, body {
   align-items: center;
   justify-content: center;
   height: 100%;
-  background: rgba(0, 0, 8, 0.65);
+  background: rgba(0, 0, 8, 0.75);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   transition: opacity 0.6s ease;
   padding: 2rem;
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 #game-over.hidden {
@@ -354,6 +366,15 @@ html, body {
   box-shadow:
     0 0 20px rgba(244, 63, 94, 0.25),
     inset 0 0 20px rgba(244, 63, 94, 0.08);
+}
+
+.restart-hint {
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.25);
+  margin-top: 1.5rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  animation: pulse-glow 2s ease-in-out infinite;
 }
 
 /* ─── Tutorial Overlay ──────────────── */

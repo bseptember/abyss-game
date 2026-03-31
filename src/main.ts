@@ -225,52 +225,64 @@ function fillGate(group: THREE.Group, gapSize: number, color: THREE.Color) {
 
   const barrierLen = TAU - gapSize;
 
-  // Force-field concentric ring arcs (barrier) — thick and bright
-  for (let r = 0.5; r <= TUNNEL_RADIUS; r += 0.9) {
-    const geo = new THREE.TorusGeometry(r, 0.08, 8, 48, barrierLen);
+  // ── DANGER ZONE: Red/orange barrier that contrasts with cyan tunnel ──
+  const dangerColor = new THREE.Color(0xff2244);
+
+  // Thick concentric barrier rings — very visible
+  for (let r = 0.4; r <= TUNNEL_RADIUS; r += 0.7) {
+    const geo = new THREE.TorusGeometry(r, 0.12, 8, 48, barrierLen);
     const mat = new THREE.MeshBasicMaterial({
-      color,
+      color: dangerColor,
       transparent: true,
-      opacity: 0.8,
+      opacity: 0.9,
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.rotation.z = gapSize / 2;
     group.add(mesh);
   }
 
-  // Solid fill disc behind rings — very visible
+  // Solid fill — makes the wall really obvious
   const discGeo = new THREE.RingGeometry(0.01, TUNNEL_RADIUS, 64, 1, gapSize / 2, barrierLen);
   const discMat = new THREE.MeshBasicMaterial({
-    color,
+    color: dangerColor,
     side: THREE.DoubleSide,
     transparent: true,
-    opacity: 0.25,
+    opacity: 0.35,
   });
   group.add(new THREE.Mesh(discGeo, discMat));
 
-  // Radial spokes across the barrier for extra visibility
-  const spokeCount = Math.floor(barrierLen / 0.4);
-  for (let s = 0; s < spokeCount; s++) {
-    const angle = gapSize / 2 + (s / spokeCount) * barrierLen;
-    const spokeGeo = new THREE.CylinderGeometry(0.03, 0.03, TUNNEL_RADIUS, 4);
-    const spokeMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.4 });
-    const spoke = new THREE.Mesh(spokeGeo, spokeMat);
-    spoke.rotation.z = angle;
-    spoke.position.set(
-      Math.cos(angle) * TUNNEL_RADIUS * 0.5,
-      Math.sin(angle) * TUNNEL_RADIUS * 0.5,
-      0,
-    );
-    group.add(spoke);
-  }
+  // Outer rim highlight — bright edge around the barrier
+  const rimGeo = new THREE.TorusGeometry(TUNNEL_RADIUS, 0.18, 8, 64, barrierLen);
+  const rimMat = new THREE.MeshBasicMaterial({ color: 0xff6644 });
+  const rim = new THREE.Mesh(rimGeo, rimMat);
+  rim.rotation.z = gapSize / 2;
+  group.add(rim);
 
-  // Bright gap-edge arcs — glow markers showing where the opening is
-  for (const edgeR of [TUNNEL_RADIUS * 0.95, TUNNEL_RADIUS * 0.6, TUNNEL_RADIUS * 0.3]) {
-    const arcGeo = new THREE.TorusGeometry(edgeR, 0.1, 8, 32, gapSize);
-    const arcMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  // ── SAFE ZONE: Bright green/white gap markers ──
+  const safeColor = new THREE.Color(0x00ff88);
+
+  // Multiple arcs marking the opening at different radii
+  for (const edgeR of [TUNNEL_RADIUS * 0.95, TUNNEL_RADIUS * 0.65, TUNNEL_RADIUS * 0.35, 0.5]) {
+    const arcGeo = new THREE.TorusGeometry(edgeR, 0.14, 8, 32, gapSize);
+    const arcMat = new THREE.MeshBasicMaterial({ color: safeColor });
     const arc = new THREE.Mesh(arcGeo, arcMat);
     arc.rotation.z = -gapSize / 2;
     group.add(arc);
+  }
+
+  // Two vertical edge-bars at the gap boundaries (radial lines from center to rim)
+  for (const side of [-1, 1]) {
+    const edgeAngle = (gapSize / 2) * side;
+    const barGeo = new THREE.PlaneGeometry(0.2, TUNNEL_RADIUS * 2);
+    const barMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.6 });
+    const bar = new THREE.Mesh(barGeo, barMat);
+    bar.position.set(
+      Math.cos(edgeAngle) * TUNNEL_RADIUS * 0.5,
+      Math.sin(edgeAngle) * TUNNEL_RADIUS * 0.5,
+      0,
+    );
+    bar.rotation.z = edgeAngle;
+    group.add(bar);
   }
 }
 
@@ -363,6 +375,9 @@ class UI {
   constructor() {
     this.startBtn.addEventListener('click', () => this.onStart?.());
     this.retryBtn.addEventListener('click', () => this.onRetry?.());
+
+    // Click anywhere on game-over overlay to retry
+    this.gameOver.addEventListener('click', () => this.onRetry?.());
 
     // Space / Enter to start or retry
     window.addEventListener('keydown', (e) => {
