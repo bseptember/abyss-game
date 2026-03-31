@@ -270,11 +270,11 @@ function fillGate(group: THREE.Group, gapSize: number, color: THREE.Color) {
     group.add(arc);
   }
 
-  // Two vertical edge-bars at the gap boundaries (radial lines from center to rim)
+  // Two bright green edge-bars at the gap boundaries (radial lines from center to rim)
   for (const side of [-1, 1]) {
     const edgeAngle = (gapSize / 2) * side;
-    const barGeo = new THREE.PlaneGeometry(0.2, TUNNEL_RADIUS * 2);
-    const barMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.6 });
+    const barGeo = new THREE.PlaneGeometry(0.14, TUNNEL_RADIUS * 2);
+    const barMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, side: THREE.DoubleSide, transparent: true, opacity: 0.9 });
     const bar = new THREE.Mesh(barGeo, barMat);
     bar.position.set(
       Math.cos(edgeAngle) * TUNNEL_RADIUS * 0.5,
@@ -485,7 +485,9 @@ class AbyssGame {
   private ambientRaf = 0;
   private gameRaf = 0;
   private deathTimeout = 0;
+  private gameOverFallbackTimeout = 0;
   private isTransitioning = false;
+  private gameOverShown = false;
 
   // Input
   private pointerX = 0.5;
@@ -693,10 +695,12 @@ class AbyssGame {
 
     // Cancel any pending death timeout and stale animation frames
     clearTimeout(this.deathTimeout);
+    clearTimeout(this.gameOverFallbackTimeout);
     cancelAnimationFrame(this.gameRaf);
     cancelAnimationFrame(this.ambientRaf);
 
     this.isTransitioning = false;
+    this.gameOverShown = false;
 
     this.audio.resume();
     this.audio.startDrone();
@@ -794,12 +798,22 @@ class AbyssGame {
 
     // Brief delay before showing game over — guarded against stale timeout
     clearTimeout(this.deathTimeout);
+    clearTimeout(this.gameOverFallbackTimeout);
     this.deathTimeout = window.setTimeout(() => {
-      if (!this.alive) {
-        this.ui.showGameOver(finalScore, finalBest, finalDepth);
-        this.isTransitioning = false;
-      }
+      this.showGameOverOnce(finalScore, finalBest, finalDepth);
     }, 600);
+
+    // Failsafe for browsers/devices where timers are throttled during transitions.
+    this.gameOverFallbackTimeout = window.setTimeout(() => {
+      this.showGameOverOnce(finalScore, finalBest, finalDepth);
+    }, 1500);
+  }
+
+  private showGameOverOnce(score: number, best: number, depth: number) {
+    if (this.gameOverShown || this.alive) return;
+    this.gameOverShown = true;
+    this.ui.showGameOver(score, best, depth);
+    this.isTransitioning = false;
   }
 
   private restart() {
@@ -835,7 +849,8 @@ class AbyssGame {
     this.camera.position.z = this.cameraZ;
 
     // Player input
-    this.targetX = (this.pointerX - 0.5) * 2 * PLAYER_MAX_R;
+    // Horizontal steering feels more natural with inverted pointer mapping in this camera setup.
+    this.targetX = (0.5 - this.pointerX) * 2 * PLAYER_MAX_R;
     this.targetY = -(this.pointerY - 0.5) * 2 * PLAYER_MAX_R;
 
     // Smooth follow
