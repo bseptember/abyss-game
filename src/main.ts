@@ -373,7 +373,14 @@ class UI {
   onRetry: (() => void) | null = null;
 
   constructor() {
-    this.startBtn.addEventListener('click', () => this.onStart?.());
+    this.startBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.onStart?.();
+    });
+
+    // Allow clicking anywhere on the start screen to begin
+    this.startScreen.addEventListener('click', () => this.onStart?.());
+
     this.retryBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       this.onRetry?.();
@@ -478,6 +485,7 @@ class AbyssGame {
   private ambientRaf = 0;
   private gameRaf = 0;
   private deathTimeout = 0;
+  private isTransitioning = false;
 
   // Input
   private pointerX = 0.5;
@@ -681,10 +689,14 @@ class AbyssGame {
   // ─── Game Flow ───────────────────────
 
   start() {
+    if (this.isTransitioning) return;
+
     // Cancel any pending death timeout and stale animation frames
     clearTimeout(this.deathTimeout);
     cancelAnimationFrame(this.gameRaf);
     cancelAnimationFrame(this.ambientRaf);
+
+    this.isTransitioning = false;
 
     this.audio.resume();
     this.audio.startDrone();
@@ -754,6 +766,9 @@ class AbyssGame {
   }
 
   private die() {
+    if (!this.alive || this.isTransitioning) return;
+
+    this.isTransitioning = true;
     this.alive = false;
     this.audio.playDeath();
     this.audio.stopDrone();
@@ -782,6 +797,7 @@ class AbyssGame {
     this.deathTimeout = window.setTimeout(() => {
       if (!this.alive) {
         this.ui.showGameOver(finalScore, finalBest, finalDepth);
+        this.isTransitioning = false;
       }
     }, 600);
   }
