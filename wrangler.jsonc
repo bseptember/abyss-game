@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "abyss-game",
+  "compatibility_date": "2026-07-18",
+  // Cloudflare Workers Builds / `wrangler deploy` after `npm run build`.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  },
+  "routes": [
+    { "pattern": "abyss.imidlalo.co.za", "custom_domain": true }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

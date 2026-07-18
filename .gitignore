@@ -2,3 +2,5 @@ node_modules
 dist
 *.local
 .vercel
+.wrangler
+.DS_Store

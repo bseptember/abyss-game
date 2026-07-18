@@ -2,16 +2,14 @@
 
 ABYSS is a fast, procedural tunnel-runner built with Three.js and Vite.
 
-[![Deploy to GitHub Pages](https://github.com/bseptember/abyss-game/actions/workflows/pages.yml/badge.svg)](https://github.com/bseptember/abyss-game/actions/workflows/pages.yml)
-
-[![Play Now on Vercel](https://img.shields.io/badge/Play%20Now-Vercel-111111?style=for-the-badge&logo=vercel)](https://abyss-game-blond.vercel.app)
-[![Play Now on GitHub Pages](https://img.shields.io/badge/Play%20Now-GitHub%20Pages-222222?style=for-the-badge&logo=github)](https://bseptember.github.io/abyss-game/)
+[![Deploy to Cloudflare](https://img.shields.io/badge/Play%20Now-abyss.imidlalo.co.za-F38020?style=for-the-badge&logo=cloudflare)](https://abyss.imidlalo.co.za)
+[![Play on GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-222222?style=for-the-badge&logo=github)](https://bseptember.github.io/abyss-game/)
 
 ## Live Links
 
-- Vercel (primary): https://abyss-game-blond.vercel.app
+- **Primary (Cloudflare):** https://abyss.imidlalo.co.za
 - GitHub repo: https://github.com/bseptember/abyss-game
-- GitHub Pages (free hosting target): https://bseptember.github.io/abyss-game/
+- GitHub Pages (fallback): https://bseptember.github.io/abyss-game/
 
 ## Controls
 
@@ -45,31 +43,33 @@ Build for production:
 npm run build
 ```
 
-Build with GitHub Pages base path:
+## Deployment (Cloudflare)
+
+Hosted like the other iMidlalo games (Workers static assets + custom domain).
+
+| Setting | Value |
+|--------|--------|
+| Build command | `npm run build` |
+| Deploy command | `npx wrangler deploy` |
+| Root directory | `/` |
+| Custom domain | `abyss.imidlalo.co.za` |
+
+### CLI
+
+```bash
+npx wrangler login
+npm run deploy
+```
+
+Cache headers live in `public/_headers`.
+
+### GitHub Pages (optional fallback)
 
 ```bash
 npm run build:gh
 ```
 
-## Deployment
-
-### Vercel
-
-This project is currently deployed to Vercel.
-
-### GitHub Pages (free)
-
-This repo includes a GitHub Actions workflow at `.github/workflows/pages.yml`.
-
-To enable it:
-
-1. Open repo Settings > Pages.
-2. Under Build and deployment, set Source to GitHub Actions.
-3. Push to `main` (or run the Pages workflow manually).
-
-After the workflow succeeds, the game is available at:
-
-https://bseptember.github.io/abyss-game/
+Workflow: `.github/workflows/pages.yml`
 
 ## License
 

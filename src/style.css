@@ -58,6 +58,8 @@ html, body {
   height: 100%;
   transition: opacity 0.8s ease;
   padding: 2rem;
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 #start-screen.hidden {

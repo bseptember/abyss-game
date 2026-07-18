@@ -1,11 +1,11 @@
 import { defineConfig } from 'vite';
 
-const REPO_NAME = 'abyss-game';
-const isGitHubActions = process.env.GITHUB_ACTIONS === 'true';
-
+// Base is always `/` for Cloudflare (abyss.imidlalo.co.za).
+// GitHub Pages uses `npm run build:gh` which passes --base=/abyss-game/.
 export default defineConfig({
-  base: isGitHubActions ? `/${REPO_NAME}/` : '/',
+  base: '/',
   build: {
     target: 'esnext',
+    cssCodeSplit: false,
   },
 });

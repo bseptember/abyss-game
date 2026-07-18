@@ -20,25 +20,29 @@ const RING_COUNT = 80;
 const RING_SPACING = 4;
 const RING_TUBE = 0.045;
 
-const GATE_POOL = 20;
+const GATE_POOL = 16;
 const GATE_SPACING = 30;
 const GATE_INITIAL_GAP = Math.PI * 0.9;   // ~162° opening
 const GATE_MIN_GAP = Math.PI * 0.26;      // ~47° opening
 const GATE_GAP_SHRINK = 0.005;
 const GATE_FIRST_Z = 140;  // First gate distance — gives time to orient
 
-const GATE_INNER_R = 0;                   // No center safe zone
-
 const PLAYER_RADIUS = 0.4;
 const PLAYER_MAX_R = 8.5;
 const PLAYER_SMOOTH = 6;
 
-const TRAIL_COUNT = 500;
-const STAR_COUNT = 3000;
-
 const SPEED_INIT = 18;
 const SPEED_MAX = 130;
 const SPEED_ACCEL = 0.45;
+
+// Adaptive quality — bloom/DPR are the biggest costs on mobile
+const IS_MOBILE = matchMedia('(max-width: 768px), (pointer: coarse)').matches;
+const LOW_POWER = IS_MOBILE || (navigator.hardwareConcurrency ?? 8) <= 4;
+const MAX_DPR = LOW_POWER ? 1.25 : 1.75;
+const TRAIL_COUNT = LOW_POWER ? 180 : 320;
+const STAR_COUNT = LOW_POWER ? 1200 : 2200;
+const USE_BLOOM = !LOW_POWER;
+const BARRIER_RING_STEP = LOW_POWER ? 1.4 : 1.0;
 
 // ─── Color Palette ─────────────────────────────────────────
 
@@ -50,12 +54,14 @@ const PALETTE = [
   new THREE.Color(0xfbbf24),   // amber
 ];
 
-function lerpPalette(t: number): THREE.Color {
+const _paletteScratch = new THREE.Color();
+
+function lerpPalette(t: number, out: THREE.Color = _paletteScratch): THREE.Color {
   t = Math.min(Math.max(t, 0), 1);
   const n = PALETTE.length - 1;
   const i = Math.min(Math.floor(t * n), n - 1);
   const f = t * n - i;
-  return PALETTE[i].clone().lerp(PALETTE[i + 1], f);
+  return out.copy(PALETTE[i]).lerp(PALETTE[i + 1], f);
 }
 
 // ─── Shaders ───────────────────────────────────────────────
@@ -174,6 +180,7 @@ class AudioEngine {
     g.connect(this.master);
     o.start();
     o.stop(this.ctx.currentTime + 0.15);
+    o.onended = () => { o.disconnect(); g.disconnect(); };
   }
 
   playDeath() {
@@ -189,11 +196,14 @@ class AudioEngine {
     g.connect(this.master);
     o.start();
     o.stop(this.ctx.currentTime + 1.2);
+    o.onended = () => { o.disconnect(); g.disconnect(); };
   }
 
   stopDrone() {
     try { this.drone?.stop(); } catch { /* ok */ }
     try { this.drone2?.stop(); } catch { /* ok */ }
+    try { this.drone?.disconnect(); } catch { /* ok */ }
+    try { this.drone2?.disconnect(); } catch { /* ok */ }
     this.drone = null;
     this.drone2 = null;
   }
@@ -211,28 +221,32 @@ interface GateData {
   flashTimer: number;
 }
 
-function fillGate(group: THREE.Group, gapSize: number, color: THREE.Color) {
-  // Clear old children
+const DANGER_COLOR = new THREE.Color(0xff2244);
+const SAFE_COLOR = new THREE.Color(0x00ff88);
+const SAFE_EDGE_RADII = [TUNNEL_RADIUS * 0.95, TUNNEL_RADIUS * 0.55, 0.5];
+
+function clearGroup(group: THREE.Group) {
   for (let i = group.children.length - 1; i >= 0; i--) {
-    const c = group.children[i];
+    const c = group.children[i] as THREE.Mesh;
     group.remove(c);
-    if ((c as THREE.Mesh).geometry) {
-      (c as THREE.Mesh).geometry.dispose();
-      const mat = (c as THREE.Mesh).material;
-      if (mat && 'dispose' in mat) (mat as THREE.Material).dispose();
-    }
+    c.geometry?.dispose();
+    const mat = c.material;
+    if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+    else if (mat) mat.dispose();
   }
+}
+
+function fillGate(group: THREE.Group, gapSize: number) {
+  clearGroup(group);
 
   const barrierLen = TAU - gapSize;
+  const radialSegs = LOW_POWER ? 32 : 48;
 
-  // ── DANGER ZONE: Red/orange barrier that contrasts with cyan tunnel ──
-  const dangerColor = new THREE.Color(0xff2244);
-
-  // Thick concentric barrier rings — very visible
-  for (let r = 0.4; r <= TUNNEL_RADIUS; r += 0.7) {
-    const geo = new THREE.TorusGeometry(r, 0.12, 8, 48, barrierLen);
+  // Concentric barrier rings (stepped for mobile)
+  for (let r = 0.5; r <= TUNNEL_RADIUS; r += BARRIER_RING_STEP) {
+    const geo = new THREE.TorusGeometry(r, 0.12, 6, radialSegs, barrierLen);
     const mat = new THREE.MeshBasicMaterial({
-      color: dangerColor,
+      color: DANGER_COLOR,
       transparent: true,
       opacity: 0.9,
     });
@@ -241,40 +255,40 @@ function fillGate(group: THREE.Group, gapSize: number, color: THREE.Color) {
     group.add(mesh);
   }
 
-  // Solid fill — makes the wall really obvious
-  const discGeo = new THREE.RingGeometry(0.01, TUNNEL_RADIUS, 64, 1, gapSize / 2, barrierLen);
+  // Solid fill disc
+  const discGeo = new THREE.RingGeometry(0.01, TUNNEL_RADIUS, radialSegs, 1, gapSize / 2, barrierLen);
   const discMat = new THREE.MeshBasicMaterial({
-    color: dangerColor,
+    color: DANGER_COLOR,
     side: THREE.DoubleSide,
     transparent: true,
     opacity: 0.35,
   });
   group.add(new THREE.Mesh(discGeo, discMat));
 
-  // Outer rim highlight — bright edge around the barrier
-  const rimGeo = new THREE.TorusGeometry(TUNNEL_RADIUS, 0.18, 8, 64, barrierLen);
-  const rimMat = new THREE.MeshBasicMaterial({ color: 0xff6644 });
-  const rim = new THREE.Mesh(rimGeo, rimMat);
+  // Outer rim
+  const rimGeo = new THREE.TorusGeometry(TUNNEL_RADIUS, 0.18, 6, radialSegs, barrierLen);
+  const rim = new THREE.Mesh(rimGeo, new THREE.MeshBasicMaterial({ color: 0xff6644 }));
   rim.rotation.z = gapSize / 2;
   group.add(rim);
 
-  // ── SAFE ZONE: Bright green/white gap markers ──
-  const safeColor = new THREE.Color(0x00ff88);
-
-  // Multiple arcs marking the opening at different radii
-  for (const edgeR of [TUNNEL_RADIUS * 0.95, TUNNEL_RADIUS * 0.65, TUNNEL_RADIUS * 0.35, 0.5]) {
-    const arcGeo = new THREE.TorusGeometry(edgeR, 0.14, 8, 32, gapSize);
-    const arcMat = new THREE.MeshBasicMaterial({ color: safeColor });
-    const arc = new THREE.Mesh(arcGeo, arcMat);
+  // Safe-gap arcs
+  for (const edgeR of SAFE_EDGE_RADII) {
+    const arcGeo = new THREE.TorusGeometry(edgeR, 0.14, 6, 24, gapSize);
+    const arc = new THREE.Mesh(arcGeo, new THREE.MeshBasicMaterial({ color: SAFE_COLOR }));
     arc.rotation.z = -gapSize / 2;
     group.add(arc);
   }
 
-  // Two bright green edge-bars at the gap boundaries (radial lines from center to rim)
-  for (const side of [-1, 1]) {
+  // Gap edge bars
+  for (const side of [-1, 1] as const) {
     const edgeAngle = (gapSize / 2) * side;
     const barGeo = new THREE.PlaneGeometry(0.14, TUNNEL_RADIUS * 2);
-    const barMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, side: THREE.DoubleSide, transparent: true, opacity: 0.9 });
+    const barMat = new THREE.MeshBasicMaterial({
+      color: SAFE_COLOR,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.9,
+    });
     const bar = new THREE.Mesh(barGeo, barMat);
     bar.position.set(
       Math.cos(edgeAngle) * TUNNEL_RADIUS * 0.5,
@@ -492,6 +506,14 @@ class AbyssGame {
   // Input
   private pointerX = 0.5;
   private pointerY = 0.5;
+  private keys = new Set<string>();
+
+  // Recycling trackers (avoid O(n²) furthest-scan)
+  private tunnelFarZ = 0;
+  private gateFarZ = 0;
+
+  // Shared color scratch for theme updates
+  private themeCol = new THREE.Color();
 
   // Audio
   private audio = new AudioEngine();
@@ -513,22 +535,28 @@ class AbyssGame {
     this.camera.lookAt(0, 0, 100);
 
     // Renderer
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: !LOW_POWER,
+      powerPreference: 'high-performance',
+    });
     this.renderer.setSize(innerWidth, innerHeight);
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, MAX_DPR));
     this.renderer.setClearColor(0x000008);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
 
-    // Post-processing
+    // Post-processing (bloom is expensive — skip on low-power devices)
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
 
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(innerWidth, innerHeight),
-      2.0, 0.5, 0.1,
+      USE_BLOOM ? 1.6 : 0,
+      0.4,
+      0.15,
     );
-    this.composer.addPass(this.bloomPass);
+    if (USE_BLOOM) this.composer.addPass(this.bloomPass);
 
     this.chromaPass = new ShaderPass(ChromaShader as any);
     this.composer.addPass(this.chromaPass);
@@ -564,8 +592,9 @@ class AbyssGame {
 
   private buildTunnel() {
     const col = lerpPalette(0);
+    this.tunnelFarZ = (RING_COUNT - 1) * RING_SPACING;
     for (let i = 0; i < RING_COUNT; i++) {
-      const geo = new THREE.TorusGeometry(TUNNEL_RADIUS, RING_TUBE, 8, 64);
+      const geo = new THREE.TorusGeometry(TUNNEL_RADIUS, RING_TUBE, 6, LOW_POWER ? 48 : 64);
       const mat = new THREE.MeshBasicMaterial({
         color: col,
         transparent: true,
@@ -579,10 +608,10 @@ class AbyssGame {
   }
 
   private buildGates() {
-    const col = lerpPalette(0);
+    this.gateFarZ = GATE_FIRST_Z + (GATE_POOL - 1) * GATE_SPACING;
     for (let i = 0; i < GATE_POOL; i++) {
       const group = new THREE.Group();
-      fillGate(group, GATE_INITIAL_GAP, col);
+      fillGate(group, GATE_INITIAL_GAP);
       group.position.z = GATE_FIRST_Z + i * GATE_SPACING;
       group.rotation.z = Math.random() * TAU;
       group.visible = false;
@@ -669,23 +698,23 @@ class AbyssGame {
     canvas.addEventListener('pointermove', (e) => update(e.clientX, e.clientY));
     canvas.addEventListener('pointerdown', (e) => update(e.clientX, e.clientY));
 
-    // Keyboard fallback (WASD/Arrows)
-    const keys = new Set<string>();
-    window.addEventListener('keydown', (e) => keys.add(e.key.toLowerCase()));
-    window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+    window.addEventListener('keydown', (e) => {
+      this.keys.add(e.key.toLowerCase());
+      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())
+          || e.code === 'Space') {
+        if (this.alive) e.preventDefault();
+      }
+    });
+    window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
+  }
 
-    // Poll keys each frame
-    const pollInterval = setInterval(() => {
-      if (!this.alive) return;
-      const step = 0.03;
-      if (keys.has('a') || keys.has('arrowleft'))  this.pointerX = Math.max(0, this.pointerX - step);
-      if (keys.has('d') || keys.has('arrowright')) this.pointerX = Math.min(1, this.pointerX + step);
-      if (keys.has('w') || keys.has('arrowup'))    this.pointerY = Math.max(0, this.pointerY - step);
-      if (keys.has('s') || keys.has('arrowdown'))  this.pointerY = Math.min(1, this.pointerY + step);
-    }, 16);
-
-    // Cleanup on page unload
-    window.addEventListener('beforeunload', () => clearInterval(pollInterval));
+  private pollKeys() {
+    if (!this.alive) return;
+    const step = 0.03;
+    if (this.keys.has('a') || this.keys.has('arrowleft'))  this.pointerX = Math.max(0, this.pointerX - step);
+    if (this.keys.has('d') || this.keys.has('arrowright')) this.pointerX = Math.min(1, this.pointerX + step);
+    if (this.keys.has('w') || this.keys.has('arrowup'))    this.pointerY = Math.max(0, this.pointerY - step);
+    if (this.keys.has('s') || this.keys.has('arrowdown'))  this.pointerY = Math.min(1, this.pointerY + step);
   }
 
   // ─── Game Flow ───────────────────────
@@ -732,12 +761,13 @@ class AbyssGame {
     }
 
     // Reset tunnel rings
+    this.tunnelFarZ = (this.tunnelRings.length - 1) * RING_SPACING;
     for (let i = 0; i < this.tunnelRings.length; i++) {
       this.tunnelRings[i].position.z = i * RING_SPACING;
     }
 
     // Reset gates
-    const col = lerpPalette(0);
+    this.gateFarZ = GATE_FIRST_Z + (this.gates.length - 1) * GATE_SPACING;
     for (let i = 0; i < this.gates.length; i++) {
       const g = this.gates[i];
       g.z = GATE_FIRST_Z + i * GATE_SPACING;
@@ -750,7 +780,7 @@ class AbyssGame {
       g.flashTimer = 0;
       g.group.visible = true;
       g.group.scale.setScalar(1);
-      fillGate(g.group, GATE_INITIAL_GAP, col);
+      fillGate(g.group, GATE_INITIAL_GAP);
     }
 
     // Camera
@@ -837,6 +867,8 @@ class AbyssGame {
   }
 
   private update(dt: number) {
+    this.pollKeys();
+
     // Speed ramp
     this.speed = Math.min(this.speed + SPEED_ACCEL * dt, SPEED_MAX);
     const speedT = (this.speed - SPEED_INIT) / (SPEED_MAX - SPEED_INIT);
@@ -870,12 +902,12 @@ class AbyssGame {
     this.playerMesh.rotation.x += dt * 2;
     this.playerMesh.rotation.y += dt * 3;
 
-    // Color progression
+    // Color progression (reuse scratch — no per-frame allocations)
     this.colorProgress = Math.min(this.score / 80, 1);
-    const themeCol = lerpPalette(this.colorProgress);
+    lerpPalette(this.colorProgress, this.themeCol);
 
     // Update player glow color
-    this.playerGlow.color.copy(themeCol);
+    this.playerGlow.color.copy(this.themeCol);
 
     // Screen shake decay
     this.shakeAmount *= 0.9;
@@ -884,20 +916,22 @@ class AbyssGame {
     this.audio.setDronePitch(speedT);
 
     // Recycle tunnel rings
-    this.recycleTunnel(themeCol);
+    this.recycleTunnel(this.themeCol);
 
     // Update and check gates
-    this.updateGates(dt, themeCol, playerZ);
+    this.updateGates(dt);
 
     // Update trail
-    this.updateTrail(themeCol, playerZ);
+    this.updateTrail(this.themeCol, playerZ);
 
     // Update starfield position (follows camera)
     this.starfield.position.z = this.cameraZ;
 
     // Update post-processing intensity based on speed
-    (this.chromaPass.uniforms as any).amount.value = 0.002 + speedT * 0.008;
-    this.bloomPass.strength = 1.8 + speedT * 1.2;
+    (this.chromaPass.uniforms as any).amount.value = 0.0015 + speedT * (LOW_POWER ? 0.004 : 0.008);
+    if (USE_BLOOM) {
+      this.bloomPass.strength = 1.4 + speedT * 1.0;
+    }
 
     // Fog density increases slightly
     (this.scene.fog as THREE.FogExp2).density = 0.006 + speedT * 0.003;
@@ -910,25 +944,17 @@ class AbyssGame {
   private recycleTunnel(color: THREE.Color) {
     for (const ring of this.tunnelRings) {
       if (ring.position.z < this.cameraZ - 10) {
-        // Find the furthest ring and place beyond it
-        let maxZ = -Infinity;
-        for (const r of this.tunnelRings) {
-          if (r.position.z > maxZ) maxZ = r.position.z;
-        }
-        ring.position.z = maxZ + RING_SPACING;
+        this.tunnelFarZ += RING_SPACING;
+        ring.position.z = this.tunnelFarZ;
 
-        // Update color
         const mat = ring.material as THREE.MeshBasicMaterial;
         mat.color.copy(color);
-
-        // Pulse effect — vary opacity by position
-        const pulse = 0.25 + 0.15 * Math.sin(ring.position.z * 0.1);
-        mat.opacity = pulse;
+        mat.opacity = 0.25 + 0.15 * Math.sin(ring.position.z * 0.1);
       }
     }
   }
 
-  private updateGates(dt: number, color: THREE.Color, playerZ: number) {
+  private updateGates(dt: number) {
     for (const gate of this.gates) {
       if (!gate.active) continue;
 
@@ -941,7 +967,6 @@ class AbyssGame {
 
       // Check if player passed through
       if (!gate.passed && this.prevZ + 12 < gate.z && this.cameraZ + 12 >= gate.z) {
-        // Collision check
         const pAngle = Math.atan2(this.playerY, this.playerX);
         const gAngle = gate.gapAngle;
         let diff = pAngle - gAngle;
@@ -951,22 +976,18 @@ class AbyssGame {
         const inGap = Math.abs(diff) < gate.gapSize / 2;
 
         if (inGap) {
-          // Passed safely!
           gate.passed = true;
           gate.flashTimer = 0.3;
           this.score++;
           this.audio.playPass();
 
-          // Shrink gap for future gates
           this.gapSize = Math.max(this.gapSize - GATE_GAP_SHRINK, GATE_MIN_GAP);
 
-          // Near-miss screen shake
           const closeness = 1 - Math.abs(diff) / (gate.gapSize / 2);
           if (closeness > 0.6) {
             this.shakeAmount = closeness * 0.8;
           }
         } else {
-          // Hit!
           this.die();
           return;
         }
@@ -974,12 +995,9 @@ class AbyssGame {
 
       // Recycle gates that are behind the camera
       if (gate.z < this.cameraZ - 30) {
-        // Find furthest gate
-        let maxZ = -Infinity;
-        for (const g of this.gates) {
-          if (g.z > maxZ) maxZ = g.z;
-        }
-        gate.z = maxZ + GATE_SPACING;
+        this.gateFarZ += GATE_SPACING;
+        const prevGap = gate.gapSize;
+        gate.z = this.gateFarZ;
         gate.group.position.z = gate.z;
         gate.group.rotation.z = Math.random() * TAU;
         gate.gapAngle = gate.group.rotation.z;
@@ -987,13 +1005,15 @@ class AbyssGame {
         gate.passed = false;
         gate.flashTimer = 0;
         gate.group.scale.setScalar(1);
-        fillGate(gate.group, this.gapSize, color);
+        // Rebuild geometry only when gap size changed (expensive otherwise)
+        if (Math.abs(prevGap - gate.gapSize) > 0.001) {
+          fillGate(gate.group, gate.gapSize);
+        }
       }
     }
   }
 
   private updateTrail(color: THREE.Color, playerZ: number) {
-    // Spawn new trail particle
     const i = this.trailHead;
     this.trailPos[i * 3] = this.playerX + (Math.random() - 0.5) * 0.3;
     this.trailPos[i * 3 + 1] = this.playerY + (Math.random() - 0.5) * 0.3;
@@ -1004,11 +1024,13 @@ class AbyssGame {
 
     this.trailHead = (this.trailHead + 1) % TRAIL_COUNT;
 
-    // Fade all particles
-    for (let j = 0; j < TRAIL_COUNT; j++) {
-      this.trailCol[j * 3] *= 0.97;
-      this.trailCol[j * 3 + 1] *= 0.97;
-      this.trailCol[j * 3 + 2] *= 0.97;
+    // Fade only a strided subset each frame (still looks continuous, far cheaper)
+    const stride = LOW_POWER ? 3 : 2;
+    const start = this.trailHead % stride;
+    for (let j = start; j < TRAIL_COUNT; j += stride) {
+      this.trailCol[j * 3] *= 0.94;
+      this.trailCol[j * 3 + 1] *= 0.94;
+      this.trailCol[j * 3 + 2] *= 0.94;
     }
 
     this.trailGeo.attributes.position.needsUpdate = true;
@@ -1059,10 +1081,10 @@ class AbyssGame {
     this.playerMesh.visible = false;
 
     // Color tunnel rings
-    const ambientColor = lerpPalette(Math.sin(elapsed * 0.1) * 0.5 + 0.5);
+    lerpPalette(Math.sin(elapsed * 0.1) * 0.5 + 0.5, this.themeCol);
     for (const ring of this.tunnelRings) {
       const mat = ring.material as THREE.MeshBasicMaterial;
-      mat.color.copy(ambientColor);
+      mat.color.copy(this.themeCol);
       mat.opacity = 0.25 + 0.15 * Math.sin(ring.position.z * 0.1);
     }
 
@@ -1082,8 +1104,9 @@ class AbyssGame {
     this.camera.aspect = innerWidth / innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(innerWidth, innerHeight);
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, MAX_DPR));
     this.composer.setSize(innerWidth, innerHeight);
-    this.bloomPass.resolution.set(innerWidth, innerHeight);
+    if (USE_BLOOM) this.bloomPass.resolution.set(innerWidth, innerHeight);
   }
 }
 
