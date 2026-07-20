@@ -28,7 +28,7 @@ ABYSS is a fast, procedural tunnel-runner built with Three.js and Vite.
 
 Requirements:
 
-- Node.js 20+
+- Node.js 22+ (required by Wrangler)
 
 Install and run:
 

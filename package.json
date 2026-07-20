@@ -5,6 +5,9 @@
   "type": "module",
   "description": "ABYSS - Infinite Descent, a procedural Three.js tunnel runner",
   "homepage": "https://abyss.imidlalo.co.za",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
