@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
   <title>ABYSS — Infinite Descent</title>
   <meta name="description" content="Navigate the void. Survive the descent. A WebGL browser game." />
   <meta name="theme-color" content="#000008" />
@@ -11,34 +11,50 @@
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;600&display=swap" rel="stylesheet" />
 </head>
 <body>
+  <!-- Death / pass flash overlay -->
+  <div id="screen-flash" aria-hidden="true"></div>
+
   <!-- UI Overlay -->
   <div id="ui">
     <!-- Start Screen -->
-    <div id="start-screen">
+    <div id="start-screen" role="dialog" aria-label="Start">
       <h1>ABYSS</h1>
       <p class="subtitle">Navigate the void. Survive the descent.</p>
       <div class="how-to-play">
         <p>Dodge the <span class="hl-red">red barriers</span> — fly through the <span class="hl-green">green gaps</span></p>
-        <p class="controls-detail">Mouse / Touch to aim &nbsp;&bull;&nbsp; WASD / Arrows to steer</p>
+        <p class="how-shape">Gaps are marked by bright edges — barriers are solid red wedges</p>
+        <p class="controls-detail" id="controls-detail">Mouse to aim &nbsp;&bull;&nbsp; WASD / Arrows to steer</p>
       </div>
-      <button id="start-btn">ENTER THE ABYSS</button>
-      <p class="controls-hint">Press SPACE or click to begin</p>
+      <button type="button" id="start-btn" aria-label="Start game">ENTER THE ABYSS</button>
+      <div class="menu-actions">
+        <button type="button" id="mute-btn-start" class="ghost-btn" aria-pressed="false" aria-label="Toggle mute">SOUND ON</button>
+      </div>
+      <p class="controls-hint" id="start-hint">Press SPACE or click the button to begin</p>
     </div>
 
     <!-- HUD -->
-    <div id="hud" class="hidden">
+    <div id="hud" class="hidden" aria-hidden="true">
       <div id="hud-top">
         <div id="score">0</div>
         <div id="depth">DEPTH 0m</div>
       </div>
-      <div id="tutorial" class="hidden">
+      <div id="tutorial" class="hidden" aria-hidden="true">
         <p><span class="hl-red">RED</span> = danger &nbsp;&bull;&nbsp; <span class="hl-green">GREEN</span> = safe gap</p>
-        <p class="tutorial-sub">Move your mouse / finger to steer through the gaps</p>
+        <p class="tutorial-sub" id="tutorial-sub">Move your mouse to steer through the gaps</p>
       </div>
+      <button type="button" id="pause-btn" class="icon-btn" aria-label="Pause game">❚❚</button>
+    </div>
+
+    <!-- Pause -->
+    <div id="pause-screen" class="hidden" role="dialog" aria-label="Paused" aria-hidden="true">
+      <h1>PAUSED</h1>
+      <button type="button" id="resume-btn" aria-label="Resume game">RESUME</button>
+      <button type="button" id="mute-btn-pause" class="ghost-btn" aria-pressed="false" aria-label="Toggle mute">SOUND ON</button>
+      <p class="controls-hint">Press ESC to resume</p>
     </div>
 
     <!-- Game Over -->
-    <div id="game-over" class="hidden">
+    <div id="game-over" class="hidden" role="dialog" aria-label="Game over" aria-hidden="true">
       <h1>SHATTERED</h1>
       <div id="final-score">0</div>
       <div id="best-score">BEST: 0</div>
@@ -46,12 +62,12 @@
         <h2>LEADERBOARD</h2>
         <ol id="leaderboard-list"></ol>
       </div>
-      <button id="retry-btn">DESCEND AGAIN</button>
-      <p class="restart-hint">Click / Tap or press SPACE to restart</p>
+      <button type="button" id="retry-btn" aria-label="Play again">DESCEND AGAIN</button>
+      <p class="restart-hint">Press SPACE or tap the button to restart</p>
     </div>
   </div>
 
-  <canvas id="game-canvas"></canvas>
+  <canvas id="game-canvas" aria-label="ABYSS game view"></canvas>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
