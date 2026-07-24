@@ -1075,7 +1075,7 @@ class AbyssGame {
   }
 
   private showGameOverOnce(score: number, best: number, depth: number) {
-    if (this.gameOverShown || this.alive) return;
+    if (this.gameOverShown) return;
     this.gameOverShown = true;
     this.ui.showGameOver(score, best, depth);
     this.isTransitioning = false;
