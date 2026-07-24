@@ -1075,13 +1075,26 @@ class AbyssGame {
   }
 
   private showGameOverOnce(score: number, best: number, depth: number) {
-    if (this.gameOverShown || this.alive) return;
+    // Never leave isTransitioning stuck if UI already shown or showGameOver throws.
+    if (this.alive) return;
+    if (this.gameOverShown) {
+      this.isTransitioning = false;
+      return;
+    }
     this.gameOverShown = true;
-    this.ui.showGameOver(score, best, depth);
-    this.isTransitioning = false;
+    try {
+      this.ui.showGameOver(score, best, depth);
+    } finally {
+      this.isTransitioning = false;
+    }
   }
 
   private restart() {
+    // Force-clear death transition so DESCEND AGAIN / SPACE always works.
+    clearTimeout(this.deathTimeout);
+    clearTimeout(this.gameOverFallbackTimeout);
+    this.isTransitioning = false;
+    this.gameOverShown = false;
     this.start();
   }
 
