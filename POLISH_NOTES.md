@@ -59,6 +59,14 @@ Shipped, ranked by impact against the premium bar:
 
 ---
 
+## Pass 3 — richer result screen
+
+1. **Run stats on game-over** *(Retention #7 / perceived quality)*
+   - Game-over now shows a clean **DEPTH** + **NEAR MISSES** stat row under the score (near-misses counted per run). Skillful play is now visible and chase-able; the result reads like a premium arcade summary instead of a bare number.
+   - Verified in headless browser: renders correctly, gold record tint applies, no horizontal overflow at 1280×720 or 375×812.
+
+---
+
 ## What still blocks "premium paid" quality
 - **No real device play-test.** The feel/tuning changes (camera lean amounts, difficulty ramp, audio mix levels) should be validated on a real phone + desktop and nudged to taste.
 - **Single game mode / no meta-progression.** Great arcade loop, but nothing to chase beyond high score (fits browser-game scope, but a daily-seed or streak could add returns).

@@ -553,6 +553,7 @@ class UI {
   private bestScoreEl = document.getElementById('best-score')!;
   private newRecordEl = document.getElementById('new-record')!;
   private startBestEl = document.getElementById('start-best')!;
+  private runStatsEl = document.getElementById('run-stats')!;
   private startBtn = document.getElementById('start-btn')!;
   private retryBtn = document.getElementById('retry-btn')!;
   private resumeBtn = document.getElementById('resume-btn')!;
@@ -676,17 +677,37 @@ class UI {
     }, 4000);
   }
 
-  showGameOver(score: number, best: number, depth: number, isNewBest: boolean) {
+  showGameOver(score: number, best: number, depth: number, isNewBest: boolean, nearMiss: number) {
     setPanelVisible(this.hud, false);
     setPanelVisible(this.pauseScreen, false);
     setPanelVisible(this.gameOver, true);
     this.finalScoreEl.textContent = String(score);
     this.bestScoreEl.textContent = `BEST: ${best}`;
+    this.renderRunStats(depth, nearMiss);
     this.newRecordEl.classList.toggle('hidden', !isNewBest);
     this.newRecordEl.setAttribute('aria-hidden', isNewBest ? 'false' : 'true');
     this.gameOver.classList.toggle('is-record', isNewBest);
     const id = addToLeaderboard(score, depth);
     renderLeaderboard(this.leaderboardList, id);
+  }
+
+  private renderRunStats(depth: number, nearMiss: number) {
+    const stat = (value: string, label: string) => {
+      const cell = document.createElement('div');
+      cell.className = 'stat-cell';
+      const v = document.createElement('span');
+      v.className = 'stat-value';
+      v.textContent = value;
+      const l = document.createElement('span');
+      l.className = 'stat-label';
+      l.textContent = label;
+      cell.append(v, l);
+      return cell;
+    };
+    this.runStatsEl.replaceChildren(
+      stat(`${Math.floor(depth)}m`, 'DEPTH'),
+      stat(String(nearMiss), nearMiss === 1 ? 'NEAR MISS' : 'NEAR MISSES'),
+    );
   }
 
   setBest(best: number) {
@@ -793,6 +814,7 @@ class AbyssGame {
   private gapSize = GATE_INITIAL_GAP;
   private lastGapAngle = 0;
   private milestoneIdx = 0;
+  private nearMissCount = 0;
   private beatBestThisRun = false;
   private colorProgress = 0;
   private shakeAmount = 0;
@@ -1140,6 +1162,7 @@ class AbyssGame {
     this.pointerY = 0.5;
     this.gapSize = GATE_INITIAL_GAP;
     this.milestoneIdx = 0;
+    this.nearMissCount = 0;
     this.beatBestThisRun = false;
     this.colorProgress = 0;
     this.shakeAmount = 0;
@@ -1230,6 +1253,7 @@ class AbyssGame {
     const finalScore = this.score;
     const finalBest = this.bestScore;
     const finalDepth = this.depth;
+    const finalNearMiss = this.nearMissCount;
 
     this.started = false;
 
@@ -1244,15 +1268,15 @@ class AbyssGame {
     clearTimeout(this.deathTimeout);
     clearTimeout(this.gameOverFallbackTimeout);
     this.deathTimeout = window.setTimeout(() => {
-      this.showGameOverOnce(finalScore, finalBest, finalDepth, isNewBest);
+      this.showGameOverOnce(finalScore, finalBest, finalDepth, isNewBest, finalNearMiss);
     }, 600);
 
     this.gameOverFallbackTimeout = window.setTimeout(() => {
-      this.showGameOverOnce(finalScore, finalBest, finalDepth, isNewBest);
+      this.showGameOverOnce(finalScore, finalBest, finalDepth, isNewBest, finalNearMiss);
     }, 1500);
   }
 
-  private showGameOverOnce(score: number, best: number, depth: number, isNewBest: boolean) {
+  private showGameOverOnce(score: number, best: number, depth: number, isNewBest: boolean, nearMiss: number) {
     // Never leave isTransitioning stuck if UI already shown or showGameOver throws.
     if (this.alive) return;
     if (this.gameOverShown) {
@@ -1267,7 +1291,7 @@ class AbyssGame {
     (this.vignettePass.uniforms as any).offset.value = 1.0;
     (this.vignettePass.uniforms as any).darkness.value = 1.5;
     try {
-      this.ui.showGameOver(score, best, depth, isNewBest);
+      this.ui.showGameOver(score, best, depth, isNewBest, nearMiss);
       if (isNewBest) {
         this.audio.playNewBest();
         haptic([18, 40, 18, 40, 60]);
@@ -1480,6 +1504,7 @@ class AbyssGame {
           }
           // Genuine near-miss — reward the tight squeeze with a distinct cue.
           if (closeness > 0.74) {
+            this.nearMissCount++;
             this.audio.playNearMiss();
             haptic([10, 24]);
             if (!REDUCE_MOTION) this.nearMissPulse = 1;
