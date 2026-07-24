@@ -62,9 +62,11 @@ html, body {
   background: radial-gradient(circle at center, #fff 0%, #ff2244 55%, transparent 80%);
 }
 
+/* Edge glow, not a center strobe — keeps rapid passes calm and premium
+   (avoids full-screen green flashing several times a second at high speed). */
 #screen-flash.flash-pass {
-  opacity: 0.18;
-  background: radial-gradient(circle at center, #00ff88 0%, transparent 60%);
+  opacity: 0.55;
+  background: radial-gradient(circle at center, transparent 52%, rgba(0, 255, 136, 0.17) 100%);
 }
 
 /* ─── UI Overlay ────────────────────── */

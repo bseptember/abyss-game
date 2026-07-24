@@ -42,6 +42,23 @@ Shipped, ranked by impact against the premium bar:
 
 ---
 
+## Pass 2 — fairness, speed rush, calmer feedback
+
+1. **Flowing gap path** *(Difficulty/Fairness #3)*
+   - Gap angles were fully independent `random()*TAU`, so consecutive gaps could sit on opposite walls — an unreachable full-diameter crossing (~0.23s at top speed) = cheap death. Now `nextGapAngle()` steps the gap by a bounded random delta from the previous one, and the max step **tightens with speed** so the line stays reachable. Deaths now come from precision, not teleports. Pairs with pass-1's tighter gaps (tense *and* fair).
+
+2. **Speed-reactive FOV** *(Feel #1)*
+   - Camera FOV widens 75°→88° with speed for a visceral acceleration rush. Reset to 75° on start and in the ambient orbit. Disabled under `REDUCE_MOTION`.
+
+3. **Calmer pass feedback** *(Audio/feel #4, safety)*
+   - The per-gate pass flash was a full-screen green center strobe at ~4 Hz at top speed (annoying + mild photosensitivity risk). Replaced with a subtle transparent-center **edge glow**; the gate scale-flash + score pulse + SFX still carry the "pass" beat.
+
+### Verification
+- `npm run build` + `tsc --noEmit` clean (apart from pre-existing `three` type noise); loads error-free.
+- Same caveat as pass 1: feel/fairness validated by logic + build, not a real-device play-test (preview couldn't composite here).
+
+---
+
 ## What still blocks "premium paid" quality
 - **No real device play-test.** The feel/tuning changes (camera lean amounts, difficulty ramp, audio mix levels) should be validated on a real phone + desktop and nudged to taste.
 - **Single game mode / no meta-progression.** Great arcade loop, but nothing to chase beyond high score (fits browser-game scope, but a daily-seed or streak could add returns).

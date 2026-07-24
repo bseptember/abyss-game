@@ -791,6 +791,7 @@ class AbyssGame {
   private cameraZ = 0;
   private prevZ = 0;
   private gapSize = GATE_INITIAL_GAP;
+  private lastGapAngle = 0;
   private milestoneIdx = 0;
   private beatBestThisRun = false;
   private colorProgress = 0;
@@ -1161,12 +1162,14 @@ class AbyssGame {
     }
 
     this.gateFarZ = GATE_FIRST_Z + (this.gates.length - 1) * GATE_SPACING;
+    this.lastGapAngle = Math.random() * TAU;
     for (let i = 0; i < this.gates.length; i++) {
       const g = this.gates[i];
       g.z = GATE_FIRST_Z + i * GATE_SPACING;
       g.group.position.z = g.z;
-      g.group.rotation.z = Math.random() * TAU;
-      g.gapAngle = g.group.rotation.z;
+      const angle = i === 0 ? this.lastGapAngle : this.nextGapAngle();
+      g.group.rotation.z = angle;
+      g.gapAngle = angle;
       const prevGap = g.gapSize;
       g.gapSize = GATE_INITIAL_GAP;
       g.passed = false;
@@ -1180,6 +1183,8 @@ class AbyssGame {
     }
 
     this.camera.position.set(0, 0, 0);
+    this.camera.fov = 75;
+    this.camera.updateProjectionMatrix();
     this.camera.lookAt(0, 0, 100);
 
     this.playerMesh.visible = true;
@@ -1306,6 +1311,15 @@ class AbyssGame {
     this.speed = Math.min(this.speed + SPEED_ACCEL * dt, SPEED_MAX);
     const speedT = (this.speed - SPEED_INIT) / (SPEED_MAX - SPEED_INIT);
 
+    // Speed-reactive FOV — widens as you accelerate for a visceral rush.
+    if (!REDUCE_MOTION) {
+      const targetFov = 75 + speedT * 13;
+      if (Math.abs(this.camera.fov - targetFov) > 0.02) {
+        this.camera.fov = targetFov;
+        this.camera.updateProjectionMatrix();
+      }
+    }
+
     this.prevZ = this.cameraZ;
     this.cameraZ += this.speed * dt;
     this.depth += this.speed * dt;
@@ -1402,6 +1416,21 @@ class AbyssGame {
     }
   }
 
+  /**
+   * Advance the gap position by a bounded random step so gates form a flowing,
+   * reachable line rather than random cross-tunnel teleports. The step tightens
+   * as speed rises (less reaction time), which keeps deaths fair, not cheap.
+   */
+  private nextGapAngle(): number {
+    const speedT = Math.min(Math.max((this.speed - SPEED_INIT) / (SPEED_MAX - SPEED_INIT), 0), 1);
+    const maxStep = Math.PI * (0.85 - 0.4 * speedT);
+    const minStep = Math.PI * 0.12;
+    const mag = minStep + Math.random() * (maxStep - minStep);
+    const dir = Math.random() < 0.5 ? -1 : 1;
+    this.lastGapAngle = ((this.lastGapAngle + dir * mag) % TAU + TAU) % TAU;
+    return this.lastGapAngle;
+  }
+
   private updateGates(dt: number) {
     for (const gate of this.gates) {
       if (!gate.active) continue;
@@ -1466,8 +1495,9 @@ class AbyssGame {
         const prevGap = gate.gapSize;
         gate.z = this.gateFarZ;
         gate.group.position.z = gate.z;
-        gate.group.rotation.z = Math.random() * TAU;
-        gate.gapAngle = gate.group.rotation.z;
+        const angle = this.nextGapAngle();
+        gate.group.rotation.z = angle;
+        gate.gapAngle = angle;
         gate.gapSize = this.gapSize;
         gate.passed = false;
         gate.flashTimer = 0;
@@ -1575,6 +1605,11 @@ class AbyssGame {
 
     if (this.ambientStart === 0) this.ambientStart = performance.now();
     const elapsed = (performance.now() - this.ambientStart) / 1000;
+
+    if (Math.abs(this.camera.fov - 75) > 0.02) {
+      this.camera.fov = 75;
+      this.camera.updateProjectionMatrix();
+    }
 
     this.cameraZ = elapsed * 5;
     this.camera.position.z = this.cameraZ;
