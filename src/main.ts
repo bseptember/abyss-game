@@ -24,7 +24,7 @@ const GATE_POOL = 16;
 const GATE_SPACING = 30;
 const GATE_INITIAL_GAP = Math.PI * 0.9;   // ~162° opening
 const GATE_MIN_GAP = Math.PI * 0.26;      // ~47° opening
-const GATE_GAP_SHRINK = 0.005;
+const GATE_GAP_SHRINK = 0.010;            // gap tightens ~2× faster for a tenser mid-game
 const GATE_FIRST_Z = 140;  // First gate distance — gives time to orient
 
 const PLAYER_RADIUS = 0.4;
@@ -33,7 +33,7 @@ const PLAYER_SMOOTH = 6;
 
 const SPEED_INIT = 18;
 const SPEED_MAX = 130;
-const SPEED_ACCEL = 0.45;
+const SPEED_ACCEL = 0.7;   // gentle but noticeable build so runs gain intensity
 
 const TOUCH_AIM_SENS = 1.35; // relative-drag gain (screen fractions → aim)
 
@@ -47,6 +47,8 @@ const TRAIL_COUNT = LOW_POWER ? 180 : 320;
 const STAR_COUNT = LOW_POWER ? 1200 : 2200;
 const USE_BLOOM = !LOW_POWER;
 const BARRIER_RING_STEP = LOW_POWER ? 1.4 : 1.0;
+
+const DEPTH_MILESTONES = [250, 500, 1000, 2000, 3500, 5000, 7500, 10000, 15000, 20000];
 
 const MUTE_KEY = 'abyss-muted';
 const BEST_KEY = 'abyss-best';
@@ -153,6 +155,12 @@ class AudioEngine {
   private sfxBus: GainNode | null = null;
   private drone: OscillatorNode | null = null;
   private drone2: OscillatorNode | null = null;
+  private pulse: OscillatorNode | null = null;
+  private pulseGain: GainNode | null = null;
+  private lfo: OscillatorNode | null = null;
+  private lfoGain: GainNode | null = null;
+  private shimmer: OscillatorNode | null = null;
+  private shimmerGain: GainNode | null = null;
   private muted = false;
 
   init() {
@@ -206,11 +214,47 @@ class AudioEngine {
     this.drone2.frequency.value = 82.5;
     this.drone2.connect(g2);
     this.drone2.start();
+
+    // Momentum pulse — a sub-bass throb gated by an LFO. Its rate and depth
+    // rise with speed so the mix physically tightens as things get faster.
+    this.pulseGain = this.ctx.createGain();
+    this.pulseGain.gain.value = 0.0;
+    this.pulseGain.connect(this.droneBus);
+    this.pulse = this.ctx.createOscillator();
+    this.pulse.type = 'triangle';
+    this.pulse.frequency.value = 36.7; // D1
+    this.pulse.connect(this.pulseGain);
+    this.pulse.start();
+
+    this.lfoGain = this.ctx.createGain();
+    this.lfoGain.gain.value = 0.09;
+    this.lfoGain.connect(this.pulseGain.gain);
+    this.lfo = this.ctx.createOscillator();
+    this.lfo.type = 'sine';
+    this.lfo.frequency.value = 1.6;
+    this.lfo.connect(this.lfoGain);
+    this.lfo.start();
+
+    // Shimmer — a faint high fifth that fades in at speed for tension.
+    this.shimmerGain = this.ctx.createGain();
+    this.shimmerGain.gain.value = 0.0;
+    this.shimmerGain.connect(this.droneBus);
+    this.shimmer = this.ctx.createOscillator();
+    this.shimmer.type = 'sine';
+    this.shimmer.frequency.value = 330;
+    this.shimmer.connect(this.shimmerGain);
+    this.shimmer.start();
   }
 
   setDronePitch(t: number) {
+    const now = this.ctx?.currentTime ?? 0;
     if (this.drone) this.drone.frequency.value = 55 + t * 60;
     if (this.drone2) this.drone2.frequency.value = 82.5 + t * 90;
+    // Pulse quickens (1.6→5.5 Hz) and deepens; shimmer swells late in the run.
+    if (this.lfo) this.lfo.frequency.setTargetAtTime(1.6 + t * 3.9, now, 0.3);
+    if (this.lfoGain) this.lfoGain.gain.setTargetAtTime(0.09 + t * 0.05, now, 0.3);
+    if (this.pulseGain) this.pulseGain.gain.setTargetAtTime(0.08 + t * 0.05, now, 0.3);
+    if (this.shimmerGain) this.shimmerGain.gain.setTargetAtTime(t * t * 0.03, now, 0.4);
   }
 
   playPass() {
@@ -244,13 +288,68 @@ class AudioEngine {
     o.onended = () => { o.disconnect(); g.disconnect(); };
   }
 
+  playNearMiss() {
+    if (!this.ctx || !this.sfxBus) return;
+    // Filtered noise-like whoosh via a fast downward sweep — a "close call" cue.
+    const o = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.setValueAtTime(2600, this.ctx.currentTime);
+    f.frequency.exponentialRampToValueAtTime(700, this.ctx.currentTime + 0.22);
+    f.Q.value = 1.4;
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(1200, this.ctx.currentTime);
+    o.frequency.exponentialRampToValueAtTime(420, this.ctx.currentTime + 0.22);
+    g.gain.setValueAtTime(0.0001, this.ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.13, this.ctx.currentTime + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, this.ctx.currentTime + 0.24);
+    o.connect(f);
+    f.connect(g);
+    g.connect(this.sfxBus);
+    o.start();
+    o.stop(this.ctx.currentTime + 0.26);
+    o.onended = () => { o.disconnect(); f.disconnect(); g.disconnect(); };
+  }
+
+  playNewBest() {
+    if (!this.ctx || !this.sfxBus) return;
+    // Rising arpeggio — a small triumphant sting for a fresh record.
+    const notes = [523.25, 659.25, 783.99, 1046.5]; // C5 E5 G5 C6
+    notes.forEach((freq, i) => {
+      const t = this.ctx!.currentTime + i * 0.09;
+      const o = this.ctx!.createOscillator();
+      const g = this.ctx!.createGain();
+      o.type = 'triangle';
+      o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.16, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);
+      o.connect(g);
+      g.connect(this.sfxBus!);
+      o.start(t);
+      o.stop(t + 0.36);
+      o.onended = () => { o.disconnect(); g.disconnect(); };
+    });
+  }
+
   stopDrone() {
-    try { this.drone?.stop(); } catch { /* ok */ }
-    try { this.drone2?.stop(); } catch { /* ok */ }
-    try { this.drone?.disconnect(); } catch { /* ok */ }
-    try { this.drone2?.disconnect(); } catch { /* ok */ }
+    const nodes = [this.drone, this.drone2, this.pulse, this.lfo, this.shimmer];
+    for (const n of nodes) {
+      try { n?.stop(); } catch { /* ok */ }
+      try { n?.disconnect(); } catch { /* ok */ }
+    }
+    for (const g of [this.pulseGain, this.lfoGain, this.shimmerGain]) {
+      try { g?.disconnect(); } catch { /* ok */ }
+    }
     this.drone = null;
     this.drone2 = null;
+    this.pulse = null;
+    this.pulseGain = null;
+    this.lfo = null;
+    this.lfoGain = null;
+    this.shimmer = null;
+    this.shimmerGain = null;
   }
 }
 
@@ -452,6 +551,8 @@ class UI {
   private depthEl = document.getElementById('depth')!;
   private finalScoreEl = document.getElementById('final-score')!;
   private bestScoreEl = document.getElementById('best-score')!;
+  private newRecordEl = document.getElementById('new-record')!;
+  private startBestEl = document.getElementById('start-best')!;
   private startBtn = document.getElementById('start-btn')!;
   private retryBtn = document.getElementById('retry-btn')!;
   private resumeBtn = document.getElementById('resume-btn')!;
@@ -464,9 +565,11 @@ class UI {
   private startHint = document.getElementById('start-hint')!;
   private leaderboardList = document.getElementById('leaderboard-list') as HTMLOListElement;
   private flashEl = document.getElementById('screen-flash')!;
+  private milestoneEl = document.getElementById('milestone')!;
   private tutorialTimer = 0;
   private flashTimer = 0;
   private scorePulseTimer = 0;
+  private milestoneTimer = 0;
 
   onStart: (() => void) | null = null;
   onRetry: (() => void) | null = null;
@@ -573,18 +676,36 @@ class UI {
     }, 4000);
   }
 
-  showGameOver(score: number, best: number, depth: number) {
+  showGameOver(score: number, best: number, depth: number, isNewBest: boolean) {
     setPanelVisible(this.hud, false);
     setPanelVisible(this.pauseScreen, false);
     setPanelVisible(this.gameOver, true);
     this.finalScoreEl.textContent = String(score);
     this.bestScoreEl.textContent = `BEST: ${best}`;
+    this.newRecordEl.classList.toggle('hidden', !isNewBest);
+    this.newRecordEl.setAttribute('aria-hidden', isNewBest ? 'false' : 'true');
+    this.gameOver.classList.toggle('is-record', isNewBest);
     const id = addToLeaderboard(score, depth);
     renderLeaderboard(this.leaderboardList, id);
   }
 
+  setBest(best: number) {
+    if (best > 0) {
+      this.startBestEl.textContent = `BEST ${best}`;
+      this.startBestEl.classList.remove('hidden');
+      this.startBestEl.setAttribute('aria-hidden', 'false');
+    } else {
+      this.startBestEl.classList.add('hidden');
+      this.startBestEl.setAttribute('aria-hidden', 'true');
+    }
+  }
+
   updateScore(score: number) {
     this.scoreEl.textContent = String(score);
+  }
+
+  markScoreBest(isBest: boolean) {
+    this.scoreEl.classList.toggle('score-best', isBest);
   }
 
   pulseScore() {
@@ -610,6 +731,24 @@ class UI {
   updateDepth(depth: number) {
     this.depthEl.textContent = `DEPTH ${Math.floor(depth)}m`;
   }
+
+  showMilestone(text: string) {
+    this.milestoneEl.textContent = text;
+    this.milestoneEl.classList.remove('hidden', 'milestone-show');
+    void this.milestoneEl.offsetWidth; // restart animation
+    this.milestoneEl.classList.add('milestone-show');
+    clearTimeout(this.milestoneTimer);
+    this.milestoneTimer = window.setTimeout(() => {
+      this.milestoneEl.classList.add('hidden');
+      this.milestoneEl.classList.remove('milestone-show');
+    }, 1500);
+  }
+
+  hideMilestone() {
+    clearTimeout(this.milestoneTimer);
+    this.milestoneEl.classList.add('hidden');
+    this.milestoneEl.classList.remove('milestone-show');
+  }
 }
 
 // ─── Main Game ─────────────────────────────────────────────
@@ -621,6 +760,7 @@ class AbyssGame {
   private renderer!: THREE.WebGLRenderer;
   private composer!: EffectComposer;
   private chromaPass!: ShaderPass;
+  private vignettePass!: ShaderPass;
   private bloomPass!: UnrealBloomPass;
 
   // World objects
@@ -651,11 +791,19 @@ class AbyssGame {
   private cameraZ = 0;
   private prevZ = 0;
   private gapSize = GATE_INITIAL_GAP;
+  private milestoneIdx = 0;
+  private beatBestThisRun = false;
   private colorProgress = 0;
   private shakeAmount = 0;
+  private nearMissPulse = 0;
+  private camLeanX = 0;
+  private camLeanY = 0;
+  private camRoll = 0;
   private lastTime = 0;
   private ambientRaf = 0;
   private gameRaf = 0;
+  private deathAnimRaf = 0;
+  private deathStart = 0;
   private deathTimeout = 0;
   private gameOverFallbackTimeout = 0;
   private isTransitioning = false;
@@ -721,7 +869,8 @@ class AbyssGame {
     this.chromaPass = new ShaderPass(ChromaShader as any);
     this.composer.addPass(this.chromaPass);
 
-    this.composer.addPass(new ShaderPass(VignetteShader as any));
+    this.vignettePass = new ShaderPass(VignetteShader as any);
+    this.composer.addPass(this.vignettePass);
 
     this.buildTunnel();
     this.buildGates();
@@ -731,6 +880,7 @@ class AbyssGame {
 
     this.audio.init();
     this.ui.syncMute(this.audio.isMuted());
+    this.ui.setBest(this.bestScore);
 
     this.setupInput(canvas);
 
@@ -799,7 +949,7 @@ class AbyssGame {
 
   private buildPlayer() {
     const geo = new THREE.IcosahedronGeometry(PLAYER_RADIUS, 2);
-    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1 });
     this.playerMesh = new THREE.Mesh(geo, mat);
     this.playerMesh.position.set(0, 0, 10);
     this.scene.add(this.playerMesh);
@@ -924,6 +1074,7 @@ class AbyssGame {
       if (this.alive && !this.paused) this.setPaused(true);
       cancelAnimationFrame(this.ambientRaf);
       cancelAnimationFrame(this.gameRaf);
+      cancelAnimationFrame(this.deathAnimRaf);
     } else if (!this.paused) {
       // Resume ambient when on menus; game loop resumes via setPaused(false)
       if (!this.alive) {
@@ -963,6 +1114,7 @@ class AbyssGame {
     clearTimeout(this.gameOverFallbackTimeout);
     cancelAnimationFrame(this.gameRaf);
     cancelAnimationFrame(this.ambientRaf);
+    cancelAnimationFrame(this.deathAnimRaf);
 
     this.isTransitioning = false;
     this.gameOverShown = false;
@@ -986,8 +1138,14 @@ class AbyssGame {
     this.pointerX = 0.5;
     this.pointerY = 0.5;
     this.gapSize = GATE_INITIAL_GAP;
+    this.milestoneIdx = 0;
+    this.beatBestThisRun = false;
     this.colorProgress = 0;
     this.shakeAmount = 0;
+    this.nearMissPulse = 0;
+    this.camLeanX = 0;
+    this.camLeanY = 0;
+    this.camRoll = 0;
     this.trailHead = 0;
 
     for (let i = 0; i < TRAIL_COUNT; i++) {
@@ -1025,12 +1183,18 @@ class AbyssGame {
     this.camera.lookAt(0, 0, 100);
 
     this.playerMesh.visible = true;
+    this.playerMesh.scale.setScalar(1);
+    (this.playerMesh.material as THREE.MeshBasicMaterial).opacity = 1;
+    (this.vignettePass.uniforms as any).offset.value = 1.0;
+    (this.vignettePass.uniforms as any).darkness.value = 1.5;
 
     this.ui.hidePause();
+    this.ui.hideMilestone();
     this.ui.showHUD();
     this.ui.showTutorial();
     this.ui.updateScore(0);
     this.ui.updateDepth(0);
+    this.ui.markScoreBest(false);
 
     this.lastTime = performance.now();
     this.gameLoop();
@@ -1043,14 +1207,17 @@ class AbyssGame {
     this.alive = false;
     this.paused = false;
     this.ui.hidePause();
+    this.ui.hideMilestone();
     this.audio.playDeath();
     this.audio.stopDrone();
     this.ui.flash('death');
     haptic([40, 30, 80]);
+    this.shakeAmount = 1.3; // hard camera punch on impact
 
     cancelAnimationFrame(this.gameRaf);
 
-    if (this.score > this.bestScore) {
+    const isNewBest = this.score > 0 && this.score > this.bestScore;
+    if (isNewBest) {
       this.bestScore = this.score;
       try { localStorage.setItem(BEST_KEY, String(this.bestScore)); } catch { /* ok */ }
     }
@@ -1060,21 +1227,27 @@ class AbyssGame {
     const finalDepth = this.depth;
 
     this.started = false;
-    this.ambientStart = 0;
-    if (!this.tabHidden) this.renderAmbient();
+
+    // Hold on the death scene and play a shatter burst instead of hard-cutting
+    // to the ambient orbit — the impact is the dramatic beat.
+    if (!this.tabHidden) {
+      this.deathStart = performance.now();
+      cancelAnimationFrame(this.deathAnimRaf);
+      this.deathAnim();
+    }
 
     clearTimeout(this.deathTimeout);
     clearTimeout(this.gameOverFallbackTimeout);
     this.deathTimeout = window.setTimeout(() => {
-      this.showGameOverOnce(finalScore, finalBest, finalDepth);
+      this.showGameOverOnce(finalScore, finalBest, finalDepth, isNewBest);
     }, 600);
 
     this.gameOverFallbackTimeout = window.setTimeout(() => {
-      this.showGameOverOnce(finalScore, finalBest, finalDepth);
+      this.showGameOverOnce(finalScore, finalBest, finalDepth, isNewBest);
     }, 1500);
   }
 
-  private showGameOverOnce(score: number, best: number, depth: number) {
+  private showGameOverOnce(score: number, best: number, depth: number, isNewBest: boolean) {
     // Never leave isTransitioning stuck if UI already shown or showGameOver throws.
     if (this.alive) return;
     if (this.gameOverShown) {
@@ -1082,11 +1255,24 @@ class AbyssGame {
       return;
     }
     this.gameOverShown = true;
+    cancelAnimationFrame(this.deathAnimRaf);
+    // Restore the ship + vignette so the ambient orbit behind the panel is clean.
+    this.playerMesh.scale.setScalar(1);
+    (this.playerMesh.material as THREE.MeshBasicMaterial).opacity = 1;
+    (this.vignettePass.uniforms as any).offset.value = 1.0;
+    (this.vignettePass.uniforms as any).darkness.value = 1.5;
     try {
-      this.ui.showGameOver(score, best, depth);
+      this.ui.showGameOver(score, best, depth, isNewBest);
+      if (isNewBest) {
+        this.audio.playNewBest();
+        haptic([18, 40, 18, 40, 60]);
+      }
     } finally {
       this.isTransitioning = false;
     }
+    // Now hand off to the ambient orbit (hidden behind the blurred panel).
+    this.ambientStart = 0;
+    if (!this.tabHidden) this.renderAmbient();
   }
 
   private restart() {
@@ -1150,6 +1336,21 @@ class AbyssGame {
 
     this.shakeAmount *= 0.9;
 
+    // Camera weight — bank into the steer and drift slightly toward the ship
+    // so movement feels physical without pulling the gate off-centre.
+    if (!REDUCE_MOTION) {
+      const leanTargetX = this.playerX * 0.16;
+      const leanTargetY = this.playerY * 0.16;
+      const rollTarget = -this.playerX * 0.018;
+      this.camLeanX += (leanTargetX - this.camLeanX) * Math.min(1, 5 * dt);
+      this.camLeanY += (leanTargetY - this.camLeanY) * Math.min(1, 5 * dt);
+      this.camRoll += (rollTarget - this.camRoll) * Math.min(1, 4 * dt);
+    } else {
+      this.camLeanX = 0;
+      this.camLeanY = 0;
+      this.camRoll = 0;
+    }
+
     this.audio.setDronePitch(speedT);
 
     this.recycleTunnel(this.themeCol);
@@ -1167,8 +1368,25 @@ class AbyssGame {
 
     (this.scene.fog as THREE.FogExp2).density = 0.006 + speedT * 0.003;
 
+    // Near-miss tunnel-vision — briefly tighten the vignette and punch chroma.
+    this.nearMissPulse *= 0.88;
+    const vig = this.vignettePass.uniforms as any;
+    vig.offset.value = 1.0 - this.nearMissPulse * 0.28;
+    vig.darkness.value = 1.5 + this.nearMissPulse * 0.9;
+    if (this.nearMissPulse > 0.02) {
+      (this.chromaPass.uniforms as any).amount.value += this.nearMissPulse * 0.006;
+    }
+
     this.ui.updateScore(this.score);
     this.ui.updateDepth(this.depth);
+
+    // Depth milestones — brief, punchy callouts that mark progress.
+    if (this.milestoneIdx < DEPTH_MILESTONES.length
+        && this.depth >= DEPTH_MILESTONES[this.milestoneIdx]) {
+      this.ui.showMilestone(`${DEPTH_MILESTONES[this.milestoneIdx]}m`);
+      haptic([12, 30, 12]);
+      this.milestoneIdx++;
+    }
   }
 
   private recycleTunnel(color: THREE.Color) {
@@ -1216,11 +1434,26 @@ class AbyssGame {
           this.ui.flash('pass');
           haptic(12);
 
+          // Surpassing your record mid-run — a distinct, one-time high point.
+          if (!this.beatBestThisRun && this.bestScore > 0 && this.score > this.bestScore) {
+            this.beatBestThisRun = true;
+            this.ui.markScoreBest(true);
+            this.ui.showMilestone('NEW BEST');
+            this.audio.playNewBest();
+            haptic([12, 30, 12]);
+          }
+
           this.gapSize = Math.max(this.gapSize - GATE_GAP_SHRINK, GATE_MIN_GAP);
 
           const closeness = 1 - Math.abs(diff) / halfGap;
           if (!REDUCE_MOTION && closeness > 0.6) {
             this.shakeAmount = closeness * 0.8;
+          }
+          // Genuine near-miss — reward the tight squeeze with a distinct cue.
+          if (closeness > 0.74) {
+            this.audio.playNearMiss();
+            haptic([10, 24]);
+            if (!REDUCE_MOTION) this.nearMissPulse = 1;
           }
         } else {
           this.die();
@@ -1275,15 +1508,61 @@ class AbyssGame {
   // ─── Render ──────────────────────────
 
   private render() {
+    let camX = this.camLeanX;
+    let camY = this.camLeanY;
     if (!REDUCE_MOTION && this.shakeAmount > 0.01) {
-      this.camera.position.x = (Math.random() - 0.5) * this.shakeAmount;
-      this.camera.position.y = (Math.random() - 0.5) * this.shakeAmount;
-    } else {
-      this.camera.position.x = 0;
-      this.camera.position.y = 0;
+      camX += (Math.random() - 0.5) * this.shakeAmount;
+      camY += (Math.random() - 0.5) * this.shakeAmount;
     }
 
+    this.camera.position.set(camX, camY, this.cameraZ);
+    // up-vector tilt induces roll; look at the tunnel axis ahead for parallax
+    this.camera.up.set(Math.sin(this.camRoll), Math.cos(this.camRoll), 0);
+    this.camera.lookAt(0, 0, this.cameraZ + 100);
+
     this.composer.render();
+  }
+
+  // ─── Death Sequence ──────────────────
+
+  private deathAnim() {
+    if (this.alive || this.tabHidden || this.gameOverShown) return;
+
+    const t = Math.min((performance.now() - this.deathStart) / 750, 1);
+    const ease = 1 - (1 - t) * (1 - t);
+
+    // Hold at the point of impact; shake + shatter carry the moment.
+    const shake = REDUCE_MOTION ? 0 : this.shakeAmount;
+    this.camera.position.set(
+      (Math.random() - 0.5) * shake,
+      (Math.random() - 0.5) * shake,
+      this.cameraZ,
+    );
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(0, 0, this.cameraZ + 100);
+    this.shakeAmount *= 0.9;
+
+    // Shatter the ship — swell, spin out and fade.
+    const mat = this.playerMesh.material as THREE.MeshBasicMaterial;
+    if (REDUCE_MOTION) {
+      mat.opacity = 1 - ease;
+    } else {
+      this.playerMesh.scale.setScalar(1 + ease * 3);
+      this.playerMesh.rotation.x += 0.45;
+      this.playerMesh.rotation.y += 0.55;
+      mat.opacity = 1 - ease;
+    }
+
+    // Vignette clamps in like a blackout.
+    const vig = this.vignettePass.uniforms as any;
+    vig.offset.value = 1.0 - ease * 0.4;
+    vig.darkness.value = 1.5 + ease * 1.2;
+
+    this.composer.render();
+
+    if (t < 1) {
+      this.deathAnimRaf = requestAnimationFrame(() => this.deathAnim());
+    }
   }
 
   // ─── Ambient (Pre-game) ──────────────
@@ -1307,6 +1586,8 @@ class AbyssGame {
 
     this.camera.position.x = Math.sin(elapsed * 0.3) * 3;
     this.camera.position.y = Math.cos(elapsed * 0.4) * 2;
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(0, 0, this.cameraZ + 100);
 
     for (const g of this.gates) g.group.visible = false;
     this.playerMesh.visible = false;

@@ -290,10 +290,21 @@ html, body {
   transition: transform 0.12s ease, text-shadow 0.12s ease, color 0.12s ease;
 }
 
+#score.score-best {
+  color: #fbbf24;
+  text-shadow: 0 0 22px rgba(251, 191, 36, 0.55);
+}
+
 #score.score-pulse {
   color: #00ff88;
   transform: scale(1.18);
   text-shadow: 0 0 24px rgba(0, 255, 136, 0.55);
+}
+
+/* Gold record run: keep the celebratory tint even while pulsing. */
+#score.score-best.score-pulse {
+  color: #ffe082;
+  text-shadow: 0 0 26px rgba(251, 191, 36, 0.7);
 }
 
 #depth {
@@ -392,6 +403,33 @@ html, body {
   text-align: center;
 }
 
+#new-record {
+  font-family: 'Orbitron', sans-serif;
+  font-size: clamp(0.75rem, 1.8vw, 1rem);
+  font-weight: 900;
+  letter-spacing: 0.4em;
+  color: #fbbf24;
+  text-shadow:
+    0 0 16px rgba(251, 191, 36, 0.7),
+    0 0 40px rgba(251, 191, 36, 0.35);
+  margin-bottom: 0.6rem;
+  padding-left: 0.4em;
+  animation: record-flash 1.6s ease-in-out infinite;
+}
+
+@keyframes record-flash {
+  0%, 100% { opacity: 0.85; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+
+/* When it's a new record, tint the final score gold to match the banner */
+#game-over.is-record #final-score {
+  color: #fbbf24;
+  text-shadow:
+    0 0 24px rgba(251, 191, 36, 0.55),
+    0 0 60px rgba(251, 191, 36, 0.25);
+}
+
 #final-score {
   font-family: 'Orbitron', sans-serif;
   font-size: clamp(2.5rem, 6vw, 4rem);
@@ -399,6 +437,17 @@ html, body {
   color: white;
   text-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
   margin-bottom: 0.5rem;
+}
+
+.start-best {
+  font-family: 'Orbitron', sans-serif;
+  font-size: clamp(0.6rem, 1.2vw, 0.78rem);
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  color: #fbbf24;
+  text-shadow: 0 0 14px rgba(251, 191, 36, 0.4);
+  margin-bottom: 0.9rem;
+  text-align: center;
 }
 
 #best-score {
@@ -511,6 +560,37 @@ html, body {
   animation: pulse-glow 2s ease-in-out infinite;
 }
 
+/* ─── Milestone Callout ─────────────── */
+
+#milestone {
+  position: absolute;
+  top: 22%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'Orbitron', sans-serif;
+  font-size: clamp(1.6rem, 5vw, 3rem);
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  color: var(--cyan);
+  text-shadow:
+    0 0 24px rgba(0, 229, 255, 0.7),
+    0 0 60px rgba(0, 229, 255, 0.3);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+#milestone.milestone-show {
+  animation: milestone-pop 1.5s ease-out forwards;
+}
+
+@keyframes milestone-pop {
+  0% { opacity: 0; transform: translateX(-50%) scale(0.7); }
+  15% { opacity: 1; transform: translateX(-50%) scale(1.12); }
+  30% { transform: translateX(-50%) scale(1); }
+  70% { opacity: 1; }
+  100% { opacity: 0; transform: translateX(-50%) scale(1); }
+}
+
 /* ─── Tutorial Overlay ──────────────── */
 
 #tutorial {
@@ -560,8 +640,14 @@ html, body {
 
 @media (prefers-reduced-motion: reduce) {
   #start-screen h1,
-  .restart-hint {
+  .restart-hint,
+  #new-record {
     animation: none;
+  }
+
+  #milestone.milestone-show {
+    animation: none;
+    opacity: 1;
   }
 
   #score,

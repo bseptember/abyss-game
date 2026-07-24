@@ -38,6 +38,7 @@
       </div>
       <button type="button" id="start-btn" aria-label="Start game">ENTER THE ABYSS</button>
       <div class="menu-actions">
+        <div id="start-best" class="start-best hidden" aria-hidden="true"></div>
         <button type="button" id="mute-btn-start" class="ghost-btn" aria-pressed="false" aria-label="Toggle mute">SOUND ON</button>
       </div>
       <p class="controls-hint" id="start-hint">Press SPACE or click the button to begin</p>
@@ -53,6 +54,7 @@
         <p><span class="hl-red">RED</span> = danger &nbsp;&bull;&nbsp; <span class="hl-green">GREEN</span> = safe gap</p>
         <p class="tutorial-sub" id="tutorial-sub">Move your mouse to steer through the gaps</p>
       </div>
+      <div id="milestone" class="hidden" aria-hidden="true"></div>
       <button type="button" id="pause-btn" class="icon-btn" aria-label="Pause game">❚❚</button>
     </div>
 
@@ -67,6 +69,7 @@
     <!-- Game Over -->
     <div id="game-over" class="hidden" role="dialog" aria-label="Game over" aria-hidden="true">
       <h1>SHATTERED</h1>
+      <div id="new-record" class="hidden" aria-hidden="true">NEW RECORD</div>
       <div id="final-score">0</div>
       <div id="best-score">BEST: 0</div>
       <div id="leaderboard">
