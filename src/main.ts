@@ -183,6 +183,11 @@ class AudioEngine {
 
   resume() { this.ctx?.resume(); }
 
+  /** Suspend all audio processing (tab hidden) — saves CPU and silences bleed. */
+  suspend() {
+    try { if (this.ctx && this.ctx.state === 'running') this.ctx.suspend(); } catch { /* ok */ }
+  }
+
   isMuted() { return this.muted; }
 
   setMuted(muted: boolean) {
@@ -663,6 +668,22 @@ class UI {
 
   showPause() {
     setPanelVisible(this.pauseScreen, true);
+    this.focusSoon(this.resumeBtn);
+  }
+
+  private focusSoon(el: HTMLElement) {
+    // Panels fade in via a visibility transition, so the element stays
+    // non-focusable until it settles. Poll briefly until it can take focus.
+    let attempts = 0;
+    const tryFocus = () => {
+      attempts++;
+      if (getComputedStyle(el).visibility !== 'hidden') {
+        try { el.focus({ preventScroll: true }); } catch { /* ok */ }
+        return;
+      }
+      if (attempts < 16) window.setTimeout(tryFocus, 40);
+    };
+    tryFocus();
   }
 
   hidePause() {
@@ -689,6 +710,7 @@ class UI {
     this.gameOver.classList.toggle('is-record', isNewBest);
     const id = addToLeaderboard(score, depth);
     renderLeaderboard(this.leaderboardList, id);
+    this.focusSoon(this.retryBtn);
   }
 
   private renderRunStats(depth: number, nearMiss: number) {
@@ -1098,9 +1120,12 @@ class AbyssGame {
       cancelAnimationFrame(this.ambientRaf);
       cancelAnimationFrame(this.gameRaf);
       cancelAnimationFrame(this.deathAnimRaf);
-    } else if (!this.paused) {
-      // Resume ambient when on menus; game loop resumes via setPaused(false)
-      if (!this.alive) {
+      this.audio.suspend();
+    } else {
+      // Restore audio context on return (mute state is preserved by master gain).
+      this.audio.resume();
+      if (!this.paused && !this.alive) {
+        // Resume ambient when on menus; game loop resumes via setPaused(false)
         this.ambientStart = 0;
         this.renderAmbient();
       }

@@ -67,6 +67,17 @@ Shipped, ranked by impact against the premium bar:
 
 ---
 
+## Pass 4 — polish & accessibility
+
+1. **Audio suspends when tab hidden** *(UX/perf)*
+   - `visibilitychange`→hidden now `ctx.suspend()`s the AudioContext (was left running, bleeding drone into the background + burning CPU); resumes on return. Mute state is preserved via master gain.
+
+2. **Focus management on panels** *(Accessibility)*
+   - Game-over focuses **DESCEND AGAIN**, pause focuses **RESUME**, via a short poll that waits out the panels' `visibility` fade-in transition. Space/Enter already worked globally, so this is a safe, additive a11y improvement (screen-reader landing + focus ring).
+   - Build + typecheck clean, loads error-free. NOTE: focus landing could **not** be runtime-verified here — CSS transitions are frozen without a composited pane, so the reveal never completes in the headless preview. Logic is correct for a real browser and fails closed (gives up after ~640ms, never throws/steals focus).
+
+---
+
 ## What still blocks "premium paid" quality
 - **No real device play-test.** The feel/tuning changes (camera lean amounts, difficulty ramp, audio mix levels) should be validated on a real phone + desktop and nudged to taste.
 - **Single game mode / no meta-progression.** Great arcade loop, but nothing to chase beyond high score (fits browser-game scope, but a daily-seed or streak could add returns).
