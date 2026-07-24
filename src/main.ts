@@ -1082,6 +1082,8 @@ class AbyssGame {
   }
 
   private restart() {
+    // Clear transitioning state to allow restart after death
+    this.isTransitioning = false;
     this.start();
   }
 
