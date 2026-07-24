@@ -85,8 +85,12 @@ Shipped, ranked by impact against the premium bar:
 - **No ship personality.** The player is a plain icosahedron; a subtle procedural form/trail identity would raise perceived production value.
 
 ## Next best 5 improvements
-1. **Play-test the curve on real devices** and fine-tune `GATE_GAP_SHRINK`, `SPEED_ACCEL`, camera-lean gains, and audio bus levels.
-2. **Depth biomes** — shift fog tint / ring density / bloom at depth milestones so the descent visibly evolves (awe + progression, no assets).
-3. **Ship + trail identity** — give the player a more distinctive procedural silhouette and a ribbon-style trail instead of point spray.
-4. **Combo / flow meter** — reward consecutive near-misses or clean streaks with a building multiplier and rising audio layer (tension + mastery).
-5. **Game-over share/replay hook** — one-tap "share your depth" text + a crisper stat readout (best depth, gates, near-misses) to drive the "one more run" and word-of-mouth loop.
+> These need a human with eyes on a composited build — this session could not
+> screenshot/validate rendering (preview pane wouldn't composite), so purely
+> visual/tuning changes were deliberately left un-shipped rather than done blind.
+
+1. **Play-test & tune on real devices** — verify and nudge `GATE_GAP_SHRINK`, `SPEED_ACCEL`, the camera-lean gains, FOV range (75→88), and audio bus levels to taste. All are single-constant dials.
+2. **Visual identity / palette** *(highest visual lever)* — the `PALETTE` ramp (cyan→indigo→fuchsia→rose→amber) leans "generic glow". A cohesive cool→vivid abyssal ramp would sharpen identity. Safe to change: danger red / safe green are hardcoded, independent of `PALETTE`.
+3. **Depth biomes** — shift fog tint / ring density / bloom at depth milestones so the descent visibly evolves (awe + progression, no assets).
+4. **Ship + trail identity** — a more distinctive procedural silhouette + ribbon-style trail instead of point spray.
+5. **Combo / flow meter** — reward consecutive near-misses with a building multiplier and rising audio layer (tension + mastery); keep the leaderboard score semantics intact.
