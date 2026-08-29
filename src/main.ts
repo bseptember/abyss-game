@@ -639,7 +639,7 @@ class UI {
       this.startHint.textContent = 'Press START or SPACE to begin';
     } else {
       this.controlsDetail.textContent = 'Mouse to aim · WASD / Arrows to steer';
-      this.tutorialSub.textContent = 'Move your mouse to steer through the gaps';
+      this.tutorialSub.textContent = 'Move your mouse or press the arrow keys to steer through the gaps';
       this.startHint.textContent = 'Press SPACE or click the button to begin';
     }
   }
