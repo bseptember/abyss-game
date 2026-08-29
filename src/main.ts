@@ -657,6 +657,8 @@ class UI {
     setPanelVisible(this.hud, false);
     setPanelVisible(this.pauseScreen, false);
     setPanelVisible(this.gameOver, false);
+    // Same treatment as pause and game-over: a remote needs a visible landing spot.
+    this.focusSoon(this.startBtn);
   }
 
   showHUD() {

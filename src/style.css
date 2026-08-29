@@ -182,7 +182,7 @@ html, body {
 #game-over button:focus-visible,
 #pause-screen button:focus-visible,
 .icon-btn:focus-visible {
-  outline: 2px solid var(--cyan);
+  outline: 3px solid var(--cyan);
   outline-offset: 3px;
 }
 
