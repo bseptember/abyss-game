@@ -37,6 +37,13 @@ const SPEED_ACCEL = 0.7;   // gentle but noticeable build so runs gain intensity
 
 const TOUCH_AIM_SENS = 1.35; // relative-drag gain (screen fractions → aim)
 
+// ─── Visual overhaul: tunnel walls + distance-fade ramp ────
+const WALL_RADIUS = 10.6;   // just outside the play field
+const WALL_LEN = 320;       // wall tube length (follows the camera)
+const GATE_VIS_FAR = 260;   // gates fully ghosted beyond this distance
+const GATE_VIS_NEAR = 60;   // gates fully solid inside this distance
+const RING_VIS_FAR = 340;   // structural rings fade range
+
 // Adaptive quality — bloom/DPR are the biggest costs on mobile
 const IS_MOBILE = matchMedia('(max-width: 768px), (pointer: coarse)').matches;
 const USE_RELATIVE_AIM = matchMedia('(pointer: coarse)').matches || IS_MOBILE;
@@ -122,8 +129,8 @@ const ChromaShader = {
 const VignetteShader = {
   uniforms: {
     tDiffuse: { value: null as THREE.Texture | null },
-    darkness: { value: 1.5 },
-    offset: { value: 1.0 },
+    darkness: { value: 1.15 },
+    offset: { value: 1.12 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -142,6 +149,87 @@ const VignetteShader = {
       float d = length((vUv - 0.5) * 2.0);
       float v = smoothstep(offset, offset - 0.45, d * (darkness + offset));
       gl_FragColor = vec4(c.rgb * v, 1.0);
+    }
+  `,
+};
+
+// Tunnel wall shader — a hex-grid tech tunnel that streams toward you.
+// Depth fade does the fog job (cheap, controllable, no gate-hiding);
+// a longitudinal luminance wave gives longitudinal motion reference even
+// when no rings are near. uTint follows the run palette.
+const WallShader = {
+  uniforms: {
+    uTime: { value: 0 },
+    uScroll: { value: 0 },       // cameraZ-proportional UV scroll
+    uTint: { value: new THREE.Color(0x00e5ff) },
+    uIntensity: { value: 1.0 },  // global brightness (speed-reactive)
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform float uTime;
+    uniform float uScroll;
+    uniform vec3 uTint;
+    uniform float uIntensity;
+    varying vec2 vUv;
+
+    // hex distance field
+    float hexDist(vec2 p) {
+      p = abs(p);
+      return max(dot(p, normalize(vec2(1.0, 1.73))), p.x);
+    }
+
+    vec4 hexCoords(vec2 uv) {
+      vec2 r = vec2(1.0, 1.73);
+      vec2 h = r * 0.5;
+      vec2 a = mod(uv, r) - h;
+      vec2 b = mod(uv - h, r) - h;
+      vec2 gv = dot(a, a) < dot(b, b) ? a : b;
+      float x = atan(gv.x, gv.y);
+      float y = 0.5 - hexDist(gv);
+      vec2 id = uv - gv;
+      return vec4(x, y, id.x, id.y);
+    }
+
+    void main() {
+      // vUv.x = angle around the tube, vUv.y = length
+      vec2 uv = vec2(vUv.x * 56.0, vUv.y * 90.0 + uScroll);
+
+      // Seam hiding: blend the last 8% of angle back to the start value
+      float seam = smoothstep(53.76, 56.0, uv.x);
+      vec2 uvAlt = vec2(uv.x - 56.0, uv.y);
+      vec4 hc0 = hexCoords(uv);
+      vec4 hc1 = hexCoords(uvAlt);
+      vec4 hc = mix(hc0, hc1, seam);
+
+      vec2 id = hc.zw;
+      // Stable per-cell hash (seam-safe: both branches hash consistently)
+      float hash = fract(sin(dot(floor(id), vec2(127.1, 311.7))) * 43758.5453);
+
+      float edge = 1.0 - smoothstep(0.04, 0.16, hc.y);   // glow the GRID LINES, dark cell interiors
+
+      // Longitudinal energy wave — a bright band sweeping down the tube
+      float wave = 0.5 + 0.5 * sin(vUv.y * 6.0 - uTime * 2.2);
+      wave = pow(wave, 6.0);
+
+      float cellGlow = step(0.88, hash) * (0.5 + 0.5 * sin(uTime * 3.0 + hash * 40.0));
+      float glow = edge * (0.55 + 0.45 * wave) + cellGlow * 0.35 * edge;
+
+      // Depth fade — darken toward the far end (uv.y=1 is the far cap)
+      float depthFade = 1.0 - smoothstep(0.42, 1.0, vUv.y);
+
+      // Angular AO: subtly darken near the seam sides for fake curvature
+      float ao = 0.72 + 0.28 * sin(vUv.x * 3.14159);
+
+      vec3 col = uTint * glow * uIntensity * depthFade * ao;
+      // Base wall tone so the tunnel reads as a surface even between lines
+      col += uTint * 0.04 * depthFade * ao;
+      gl_FragColor = vec4(col, 1.0);
     }
   `,
 };
@@ -368,11 +456,19 @@ interface GateData {
   passed: boolean;
   active: boolean;
   flashTimer: number;
+  mats: GateMats;      // for distance-ramped visibility
 }
 
 const DANGER_COLOR = new THREE.Color(0xff2244);
 const SAFE_COLOR = new THREE.Color(0x00ff88);
 const SAFE_EDGE_RADII = [TUNNEL_RADIUS * 0.95, TUNNEL_RADIUS * 0.7, TUNNEL_RADIUS * 0.45, 0.5];
+
+// Per-gate material collections so updateGates() can ramp visibility by distance.
+interface GateMats {
+  barrier: THREE.MeshBasicMaterial[];  // solid rings + disc
+  rim: THREE.MeshBasicMaterial;        // outer rim
+  safe: THREE.MeshBasicMaterial[];     // gap arcs + edge bars
+}
 
 function clearGroup(group: THREE.Group) {
   for (let i = group.children.length - 1; i >= 0; i--) {
@@ -385,11 +481,14 @@ function clearGroup(group: THREE.Group) {
   }
 }
 
-function fillGate(group: THREE.Group, gapSize: number) {
+function fillGate(group: THREE.Group, gapSize: number): GateMats {
   clearGroup(group);
 
   const barrierLen = TAU - gapSize;
   const radialSegs = LOW_POWER ? 32 : 48;
+  const barrier: THREE.MeshBasicMaterial[] = [];
+  const safe: THREE.MeshBasicMaterial[] = [];
+  let rim: THREE.MeshBasicMaterial;
 
   // Concentric barrier rings — alternating opacity as non-color danger cue
   let ringIdx = 0;
@@ -398,37 +497,49 @@ function fillGate(group: THREE.Group, gapSize: number) {
     const mat = new THREE.MeshBasicMaterial({
       color: DANGER_COLOR,
       transparent: true,
-      opacity: ringIdx % 2 === 0 ? 0.95 : 0.55,
+      opacity: ringIdx % 2 === 0 ? 0.85 : 0.5,
+      depthWrite: false,
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.rotation.z = gapSize / 2;
     group.add(mesh);
+    barrier.push(mat);
     ringIdx++;
   }
 
-  // Solid fill disc
+  // Barrier disc — deep crimson (not bright), so the GAP pops, not the wall
   const discGeo = new THREE.RingGeometry(0.01, TUNNEL_RADIUS, radialSegs, 1, gapSize / 2, barrierLen);
   const discMat = new THREE.MeshBasicMaterial({
-    color: DANGER_COLOR,
+    color: 0x8a1020,
     side: THREE.DoubleSide,
     transparent: true,
-    opacity: 0.35,
+    opacity: 0.42,
+    depthWrite: false,
   });
   group.add(new THREE.Mesh(discGeo, discMat));
+  barrier.push(discMat);
 
   // Outer rim
   const rimGeo = new THREE.TorusGeometry(TUNNEL_RADIUS, 0.22, 6, radialSegs, barrierLen);
-  const rim = new THREE.Mesh(rimGeo, new THREE.MeshBasicMaterial({ color: 0xff6644 }));
-  rim.rotation.z = gapSize / 2;
-  group.add(rim);
+  rim = new THREE.MeshBasicMaterial({ color: 0xff5544, transparent: true, opacity: 0.9 });
+  const rimMesh = new THREE.Mesh(rimGeo, rim);
+  rimMesh.rotation.z = gapSize / 2;
+  group.add(rimMesh);
 
   // Safe-gap arcs (extra rings = shape cue beyond color)
   for (const edgeR of SAFE_EDGE_RADII) {
     const tube = edgeR > TUNNEL_RADIUS * 0.8 ? 0.18 : 0.12;
     const arcGeo = new THREE.TorusGeometry(edgeR, tube, 6, 28, gapSize);
-    const arc = new THREE.Mesh(arcGeo, new THREE.MeshBasicMaterial({ color: SAFE_COLOR }));
+    const mat = new THREE.MeshBasicMaterial({
+      color: SAFE_COLOR,
+      transparent: true,
+      opacity: 1,
+      depthWrite: false,
+    });
+    const arc = new THREE.Mesh(arcGeo, mat);
     arc.rotation.z = -gapSize / 2;
     group.add(arc);
+    safe.push(mat);
   }
 
   // Gap edge bars — bright radial markers (chevrons via thickness)
@@ -440,6 +551,7 @@ function fillGate(group: THREE.Group, gapSize: number) {
       side: THREE.DoubleSide,
       transparent: true,
       opacity: 1,
+      depthWrite: false,
     });
     const bar = new THREE.Mesh(barGeo, barMat);
     bar.position.set(
@@ -460,7 +572,15 @@ function fillGate(group: THREE.Group, gapSize: number) {
     );
     tip.rotation.z = edgeAngle;
     group.add(tip);
+
+    safe.push(barMat, tip.material as THREE.MeshBasicMaterial);
   }
+
+  // Record base opacities so the distance ramp in updateGates() can scale them
+  for (const m of barrier) m.userData.baseOpacity = m.opacity;
+  rim.userData.baseOpacity = rim.opacity;
+
+  return { barrier, rim, safe };
 }
 
 // ─── Leaderboard ───────────────────────────────────────────
@@ -777,6 +897,12 @@ class UI {
     this.depthEl.textContent = `DEPTH ${Math.floor(depth)}m`;
   }
 
+  updateSpeed(t: number) {
+    // t: 0..1 speed ramp → speed bar fill
+    const fill = document.getElementById('speed-fill');
+    if (fill) fill.style.height = `${Math.round(Math.min(Math.max(t, 0), 1) * 100)}%`;
+  }
+
   showMilestone(text: string) {
     this.milestoneEl.textContent = text;
     this.milestoneEl.classList.remove('hidden', 'milestone-show');
@@ -814,6 +940,15 @@ class AbyssGame {
   private playerMesh!: THREE.Mesh;
   private playerGlow!: THREE.PointLight;
   private starfield!: THREE.Points;
+  private wallMesh!: THREE.Mesh;
+  private wallMat!: THREE.ShaderMaterial;
+  private speedLines!: THREE.Points;
+  private speedLinesMat!: THREE.PointsMaterial;
+  private speedLinesGeo!: THREE.BufferGeometry;
+  private flame!: THREE.Mesh;
+  private flameMat!: THREE.MeshBasicMaterial;
+  private edgeMat!: THREE.LineBasicMaterial;
+  private coreMat!: THREE.MeshBasicMaterial;
 
   // Trail
   private trailGeo!: THREE.BufferGeometry;
@@ -829,6 +964,7 @@ class AbyssGame {
   private bestScore = 0;
   private depth = 0;
   private speed = SPEED_INIT;
+  private speedVis = 0;         // smoothed 0-1 speed visibility for speed lines
   private playerX = 0;
   private playerY = 0;
   private targetX = 0;
@@ -841,6 +977,8 @@ class AbyssGame {
   private nearMissCount = 0;
   private beatBestThisRun = false;
   private colorProgress = 0;
+  private bank = 0;
+  private pitch = 0;
   private shakeAmount = 0;
   private nearMissPulse = 0;
   private camLeanX = 0;
@@ -885,7 +1023,7 @@ class AbyssGame {
     const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.FogExp2(0x000008, 0.006);
+    this.scene.fog = new THREE.FogExp2(0x000008, 0.0015);
 
     this.camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 600);
     this.camera.position.set(0, 0, 0);
@@ -907,9 +1045,9 @@ class AbyssGame {
 
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(innerWidth, innerHeight),
-      USE_BLOOM ? 1.6 : 0,
-      0.4,
-      0.15,
+      USE_BLOOM ? 0.8 : 0,
+      0.45,
+      0.55,
     );
     if (USE_BLOOM) this.composer.addPass(this.bloomPass);
 
@@ -924,6 +1062,7 @@ class AbyssGame {
     this.buildPlayer();
     this.buildStarfield();
     this.buildTrail();
+    this.buildSpeedLines();
 
     this.audio.init();
     this.ui.syncMute(this.audio.isMuted());
@@ -959,12 +1098,35 @@ class AbyssGame {
   private buildTunnel() {
     const col = lerpPalette(0);
     this.tunnelFarZ = (RING_COUNT - 1) * RING_SPACING;
+
+    // ── Tunnel walls: hex-grid shader tube (the enclosure) ──
+    const wallGeo = new THREE.CylinderGeometry(
+      WALL_RADIUS, WALL_RADIUS, WALL_LEN, 48, 1, true,
+    );
+    // Cylinder's height axis is Y; rotate so it runs along Z (game axis).
+    wallGeo.rotateX(Math.PI / 2);
+    // Move UV origin so uv.y=0 sits at the tube's near end.
+    wallGeo.translate(0, 0, WALL_LEN / 2);
+    this.wallMat = new THREE.ShaderMaterial({
+      uniforms: WallShader.uniforms,
+      vertexShader: WallShader.vertexShader,
+      fragmentShader: WallShader.fragmentShader,
+      side: THREE.BackSide,
+      fog: false,
+    });
+    this.wallMesh = new THREE.Mesh(wallGeo, this.wallMat);
+    this.wallMesh.renderOrder = -1;
+    this.scene.add(this.wallMesh);
+
+    // ── Structural rings: beefier + brighter, distance-faded in update() ──
     for (let i = 0; i < RING_COUNT; i++) {
-      const geo = new THREE.TorusGeometry(TUNNEL_RADIUS, RING_TUBE, 6, LOW_POWER ? 48 : 64);
+      const geo = new THREE.TorusGeometry(TUNNEL_RADIUS, RING_TUBE * 2.2, 6, LOW_POWER ? 48 : 64);
       const mat = new THREE.MeshBasicMaterial({
         color: col,
         transparent: true,
-        opacity: 0.35,
+        opacity: 0.5,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
       });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.z = i * RING_SPACING;
@@ -973,11 +1135,38 @@ class AbyssGame {
     }
   }
 
+  private buildSpeedLines() {
+    // Screen-space-ish streaks: points distributed in a tube around the camera,
+    // recycled as the camera passes them. Only visible at high speed.
+    const COUNT = LOW_POWER ? 90 : 160;
+    const pos = new Float32Array(COUNT * 3);
+    for (let i = 0; i < COUNT; i++) {
+      const a = Math.random() * TAU;
+      const r = TUNNEL_RADIUS * (0.55 + Math.random() * 0.4);
+      pos[i * 3] = Math.cos(a) * r;
+      pos[i * 3 + 1] = Math.sin(a) * r;
+      pos[i * 3 + 2] = Math.random() * WALL_LEN;
+    }
+    this.speedLinesGeo = new THREE.BufferGeometry();
+    this.speedLinesGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    this.speedLinesMat = new THREE.PointsMaterial({
+      size: 0.5,
+      color: 0x9be8ff,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    this.speedLines = new THREE.Points(this.speedLinesGeo, this.speedLinesMat);
+    this.speedLines.frustumCulled = false;
+    this.scene.add(this.speedLines);
+  }
+
   private buildGates() {
     this.gateFarZ = GATE_FIRST_Z + (GATE_POOL - 1) * GATE_SPACING;
     for (let i = 0; i < GATE_POOL; i++) {
       const group = new THREE.Group();
-      fillGate(group, GATE_INITIAL_GAP);
+      const mats = fillGate(group, GATE_INITIAL_GAP);
       group.position.z = GATE_FIRST_Z + i * GATE_SPACING;
       group.rotation.z = Math.random() * TAU;
       group.visible = false;
@@ -990,19 +1179,60 @@ class AbyssGame {
         passed: false,
         active: false,
         flashTimer: 0,
+        mats,
       });
     }
   }
 
   private buildPlayer() {
-    const geo = new THREE.IcosahedronGeometry(PLAYER_RADIUS, 2);
-    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1 });
-    this.playerMesh = new THREE.Mesh(geo, mat);
+    // Faceted dart ship: an octahedron stretched along Z. Distinct silhouette
+    // (arrow pointing where you're going) that bloom can't melt into a blob.
+    const group = new THREE.Group();
+
+    const hullGeo = new THREE.OctahedronGeometry(PLAYER_RADIUS * 1.35, 0);
+    hullGeo.rotateX(-Math.PI / 2);          // point along +Z
+    hullGeo.scale(0.78, 0.62, 2.1);         // slim dart
+    const hullMat = new THREE.MeshBasicMaterial({ color: 0x12283a });
+    const hull = new THREE.Mesh(hullGeo, hullMat);
+    group.add(hull);
+
+    // Bright hull edges — the readable outline (thin wireframe overlay)
+    const edgesGeo = new THREE.EdgesGeometry(hullGeo, 20);
+    this.edgeMat = new THREE.LineBasicMaterial({
+      color: 0xaef4ff,
+      transparent: true,
+      opacity: 1,
+    });
+    group.add(new THREE.LineSegments(edgesGeo, this.edgeMat));
+
+    // Engine core — small, saturated, deliberately BELOW bloom threshold size
+    const coreGeo = new THREE.SphereGeometry(0.2, 12, 12);
+    this.coreMat = new THREE.MeshBasicMaterial({ color: 0x8af6ff });
+    const core = new THREE.Mesh(coreGeo, this.coreMat);
+    core.position.z = -0.6;
+    group.add(core);
+
+    this.playerMesh = new THREE.Mesh();
+    this.playerMesh.add(group);
     this.playerMesh.position.set(0, 0, 10);
     this.scene.add(this.playerMesh);
 
     this.playerGlow = new THREE.PointLight(0x00e5ff, 3, 20);
     this.playerMesh.add(this.playerGlow);
+
+    // Engine flame — a small additive cone behind the ship, scale-animated
+    const flameGeo = new THREE.ConeGeometry(0.3, 2.0, 10, 1, true);
+    flameGeo.rotateX(Math.PI / 2);          // point away from travel (+Z→-Z behind)
+    flameGeo.translate(0, 0, -1.1);
+    this.flameMat = new THREE.MeshBasicMaterial({
+      color: 0x37c8ff,
+      transparent: true,
+      opacity: 0.85,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    this.flame = new THREE.Mesh(flameGeo, this.flameMat);
+    group.add(this.flame);
   }
 
   private buildStarfield() {
@@ -1192,6 +1422,9 @@ class AbyssGame {
     this.nearMissCount = 0;
     this.beatBestThisRun = false;
     this.colorProgress = 0;
+    this.bank = 0;
+    this.pitch = 0;
+    this.speedVis = 0;
     this.shakeAmount = 0;
     this.nearMissPulse = 0;
     this.camLeanX = 0;
@@ -1228,20 +1461,20 @@ class AbyssGame {
       g.group.visible = true;
       g.group.scale.setScalar(1);
       if (Math.abs(prevGap - GATE_INITIAL_GAP) > 0.001 || g.group.children.length === 0) {
-        fillGate(g.group, GATE_INITIAL_GAP);
+        g.mats = fillGate(g.group, GATE_INITIAL_GAP);
       }
     }
 
     this.camera.position.set(0, 0, 0);
-    this.camera.fov = 75;
+    this.camera.fov = 78;
     this.camera.updateProjectionMatrix();
     this.camera.lookAt(0, 0, 100);
 
     this.playerMesh.visible = true;
     this.playerMesh.scale.setScalar(1);
-    (this.playerMesh.material as THREE.MeshBasicMaterial).opacity = 1;
-    (this.vignettePass.uniforms as any).offset.value = 1.0;
-    (this.vignettePass.uniforms as any).darkness.value = 1.5;
+    this.setShipFade(1);
+    (this.vignettePass.uniforms as any).offset.value = 1.12;
+    (this.vignettePass.uniforms as any).darkness.value = 1.15;
 
     this.ui.hidePause();
     this.ui.hideMilestone();
@@ -1314,9 +1547,9 @@ class AbyssGame {
     cancelAnimationFrame(this.deathAnimRaf);
     // Restore the ship + vignette so the ambient orbit behind the panel is clean.
     this.playerMesh.scale.setScalar(1);
-    (this.playerMesh.material as THREE.MeshBasicMaterial).opacity = 1;
-    (this.vignettePass.uniforms as any).offset.value = 1.0;
-    (this.vignettePass.uniforms as any).darkness.value = 1.5;
+    this.setShipFade(1);
+    (this.vignettePass.uniforms as any).offset.value = 1.12;
+    (this.vignettePass.uniforms as any).darkness.value = 1.15;
     try {
       this.ui.showGameOver(score, best, depth, isNewBest, nearMiss);
       if (isNewBest) {
@@ -1362,9 +1595,10 @@ class AbyssGame {
     this.speed = Math.min(this.speed + SPEED_ACCEL * dt, SPEED_MAX);
     const speedT = (this.speed - SPEED_INIT) / (SPEED_MAX - SPEED_INIT);
 
-    // Speed-reactive FOV — widens as you accelerate for a visceral rush.
+    // Speed-reactive FOV — tunnel runners read best when the tunnel mouth
+    // WIDENS with speed (walls rush outward), not narrows. Slight net gain.
     if (!REDUCE_MOTION) {
-      const targetFov = 75 + speedT * 13;
+      const targetFov = 78 + speedT * 10;
       if (Math.abs(this.camera.fov - targetFov) > 0.02) {
         this.camera.fov = targetFov;
         this.camera.updateProjectionMatrix();
@@ -1391,8 +1625,22 @@ class AbyssGame {
 
     const playerZ = this.cameraZ + 12;
     this.playerMesh.position.set(this.playerX, this.playerY, playerZ);
-    this.playerMesh.rotation.x += dt * 2;
-    this.playerMesh.rotation.y += dt * 3;
+    // Ship banks into the steer (roll) and pitches slightly — reads as flight,
+    // not a floating marble. Reduced-motion keeps it level.
+    if (REDUCE_MOTION) {
+      this.playerMesh.rotation.set(0, 0, 0);
+    } else {
+      const bankTarget = -this.targetX * 0.055;
+      const pitchTarget = this.targetY * 0.03;
+      this.bank += (bankTarget - this.bank) * Math.min(1, 8 * dt);
+      this.pitch += (pitchTarget - this.pitch) * Math.min(1, 8 * dt);
+      this.playerMesh.rotation.set(this.pitch, 0, this.bank);
+    }
+
+    // Engine flame flickers + stretches with speed
+    const flameT = 0.75 + speedT * 0.9 + Math.random() * 0.18;
+    this.flame.scale.set(1, 1, flameT);
+    this.flameMat.opacity = 0.55 + speedT * 0.35;
 
     this.colorProgress = Math.min(this.score / 80, 1);
     lerpPalette(this.colorProgress, this.themeCol);
@@ -1422,28 +1670,64 @@ class AbyssGame {
     this.updateGates(dt);
     this.updateTrail(this.themeCol, playerZ);
 
+    // ── Tunnel walls: follow camera + scroll texture by distance ──
+    this.wallMesh.position.z = this.cameraZ - WALL_LEN * 0.35;
+    this.wallMat.uniforms.uScroll.value = this.cameraZ * 0.16;
+    this.wallMat.uniforms.uTime.value += dt;
+    this.wallMat.uniforms.uTint.value.copy(this.themeCol);
+    this.wallMat.uniforms.uIntensity.value = 1.0 + speedT * 0.4;
+
+    // ── Structural rings: distance fade so far rings melt into the wall ──
+    for (const ring of this.tunnelRings) {
+      const d = ring.position.z - this.cameraZ;
+      const t = Math.min(Math.max(1 - d / RING_VIS_FAR, 0), 1);
+      (ring.material as THREE.MeshBasicMaterial).opacity = 0.12 + 0.4 * t;
+    }
+
+    // ── Speed lines: recycle + fade in above ~45% speed ──
+    {
+      const posAttr = this.speedLinesGeo.getAttribute('position') as THREE.BufferAttribute;
+      const arr = posAttr.array as Float32Array;
+      for (let i = 0; i < arr.length; i += 3) {
+        if (arr[i + 2] < this.cameraZ + 5) {
+          // recycle ahead of the camera at a fresh angular position
+          const a = Math.random() * TAU;
+          const r = TUNNEL_RADIUS * (0.55 + Math.random() * 0.4);
+          arr[i] = Math.cos(a) * r;
+          arr[i + 1] = Math.sin(a) * r;
+          arr[i + 2] = this.cameraZ + WALL_LEN * (0.6 + Math.random() * 0.4);
+        }
+      }
+      posAttr.needsUpdate = true;
+      this.speedLines.position.z = 0;
+      const targetVis = REDUCE_MOTION ? 0 : Math.max(0, (speedT - 0.35) / 0.65);
+      this.speedVis += (targetVis - this.speedVis) * Math.min(1, 3 * dt);
+      this.speedLinesMat.opacity = this.speedVis * 0.75;
+    }
+
     this.starfield.position.z = this.cameraZ;
 
     const chromaBase = REDUCE_MOTION ? 0.0008 : 0.0015;
     const chromaGain = REDUCE_MOTION ? 0 : (LOW_POWER ? 0.004 : 0.008);
     (this.chromaPass.uniforms as any).amount.value = chromaBase + speedT * chromaGain;
     if (USE_BLOOM) {
-      this.bloomPass.strength = 1.4 + speedT * 1.0;
+      this.bloomPass.strength = 0.85 + speedT * 0.55;
     }
 
-    (this.scene.fog as THREE.FogExp2).density = 0.006 + speedT * 0.003;
+    (this.scene.fog as THREE.FogExp2).density = 0.0015 + speedT * 0.0008;
 
     // Near-miss tunnel-vision — briefly tighten the vignette and punch chroma.
     this.nearMissPulse *= 0.88;
     const vig = this.vignettePass.uniforms as any;
-    vig.offset.value = 1.0 - this.nearMissPulse * 0.28;
-    vig.darkness.value = 1.5 + this.nearMissPulse * 0.9;
+    vig.offset.value = 1.12 - this.nearMissPulse * 0.28;
+    vig.darkness.value = 1.15 + this.nearMissPulse * 0.9;
     if (this.nearMissPulse > 0.02) {
       (this.chromaPass.uniforms as any).amount.value += this.nearMissPulse * 0.006;
     }
 
     this.ui.updateScore(this.score);
     this.ui.updateDepth(this.depth);
+    this.ui.updateSpeed(speedT);
 
     // Depth milestones — brief, punchy callouts that mark progress.
     if (this.milestoneIdx < DEPTH_MILESTONES.length
@@ -1459,10 +1743,8 @@ class AbyssGame {
       if (ring.position.z < this.cameraZ - 10) {
         this.tunnelFarZ += RING_SPACING;
         ring.position.z = this.tunnelFarZ;
-
-        const mat = ring.material as THREE.MeshBasicMaterial;
-        mat.color.copy(color);
-        mat.opacity = 0.25 + 0.15 * Math.sin(ring.position.z * 0.1);
+        (ring.material as THREE.MeshBasicMaterial).color.copy(color);
+        // opacity is owned by the distance-fade loop in update()
       }
     }
   }
@@ -1485,6 +1767,22 @@ class AbyssGame {
   private updateGates(dt: number) {
     for (const gate of this.gates) {
       if (!gate.active) continue;
+
+      // ── Distance-ramped visibility ──
+      // Safe gap markers stay visible from far away (the aiming target);
+      // the red barrier fades in as the gate approaches. No more "materializing".
+      {
+        const dist = gate.z - this.cameraZ;
+        const t = Math.min(Math.max(1 - (dist - GATE_VIS_NEAR) / (GATE_VIS_FAR - GATE_VIS_NEAR), 0), 1);
+        const ease = t * t * (3 - 2 * t);
+        for (const m of gate.mats.barrier) {
+          m.opacity = (m.userData.baseOpacity as number) * (0.08 + 0.92 * ease);
+        }
+        gate.mats.rim.opacity = 0.9 * (0.12 + 0.88 * ease);
+        for (const m of gate.mats.safe) {
+          m.opacity = 0.5 + 0.5 * ease;
+        }
+      }
 
       if (gate.flashTimer > 0) {
         gate.flashTimer -= dt;
@@ -1554,8 +1852,8 @@ class AbyssGame {
         gate.passed = false;
         gate.flashTimer = 0;
         gate.group.scale.setScalar(1);
-        if (Math.abs(prevGap - gate.gapSize) > 0.001) {
-          fillGate(gate.group, gate.gapSize);
+        if (Math.abs(prevGap - gate.gapSize) > 0.001 || gate.group.children.length === 0) {
+          gate.mats = fillGate(gate.group, gate.gapSize);
         }
       }
     }
@@ -1588,6 +1886,13 @@ class AbyssGame {
   }
 
   // ─── Render ──────────────────────────
+
+  /** Fade the whole ship group (hull edges, core, flame) without touching geometry. */
+  private setShipFade(a: number) {
+    this.edgeMat.opacity = 0.95 * a;
+    this.coreMat.opacity = a;
+    this.flameMat.opacity = (0.55 + ((this.speed - SPEED_INIT) / (SPEED_MAX - SPEED_INIT)) * 0.35) * a;
+  }
 
   private render() {
     let camX = this.camLeanX;
@@ -1625,20 +1930,19 @@ class AbyssGame {
     this.shakeAmount *= 0.9;
 
     // Shatter the ship — swell, spin out and fade.
-    const mat = this.playerMesh.material as THREE.MeshBasicMaterial;
     if (REDUCE_MOTION) {
-      mat.opacity = 1 - ease;
+      this.setShipFade(1 - ease);
     } else {
       this.playerMesh.scale.setScalar(1 + ease * 3);
       this.playerMesh.rotation.x += 0.45;
       this.playerMesh.rotation.y += 0.55;
-      mat.opacity = 1 - ease;
+      this.setShipFade(1 - ease);
     }
 
     // Vignette clamps in like a blackout.
     const vig = this.vignettePass.uniforms as any;
-    vig.offset.value = 1.0 - ease * 0.4;
-    vig.darkness.value = 1.5 + ease * 1.2;
+    vig.offset.value = 1.12 - ease * 0.4;
+    vig.darkness.value = 1.15 + ease * 1.2;
 
     this.composer.render();
 
@@ -1658,8 +1962,8 @@ class AbyssGame {
     if (this.ambientStart === 0) this.ambientStart = performance.now();
     const elapsed = (performance.now() - this.ambientStart) / 1000;
 
-    if (Math.abs(this.camera.fov - 75) > 0.02) {
-      this.camera.fov = 75;
+    if (Math.abs(this.camera.fov - 78) > 0.02) {
+      this.camera.fov = 78;
       this.camera.updateProjectionMatrix();
     }
 
@@ -1678,6 +1982,14 @@ class AbyssGame {
 
     for (const g of this.gates) g.group.visible = false;
     this.playerMesh.visible = false;
+
+    // Ambient walls keep drifting so the menu backdrop feels alive
+    this.wallMesh.position.z = this.cameraZ - WALL_LEN * 0.35;
+    this.wallMat.uniforms.uScroll.value = this.cameraZ * 0.16;
+    this.wallMat.uniforms.uTime.value += 0.016;
+    lerpPalette(Math.sin(elapsed * 0.1) * 0.5 + 0.5, this.themeCol);
+    this.wallMat.uniforms.uTint.value.copy(this.themeCol);
+    this.wallMat.uniforms.uIntensity.value = 0.9;
 
     lerpPalette(Math.sin(elapsed * 0.1) * 0.5 + 0.5, this.themeCol);
     for (const ring of this.tunnelRings) {
