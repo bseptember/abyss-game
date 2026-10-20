@@ -1823,7 +1823,8 @@ class AbyssGame {
 
           this.gapSize = Math.max(this.gapSize - GATE_GAP_SHRINK, GATE_MIN_GAP);
 
-          const closeness = 1 - Math.abs(diff) / halfGap;
+          // 0 = dead centre of the gap, 1 = grazing the barrier edge.
+          const closeness = Math.abs(diff) / halfGap;
           if (!REDUCE_MOTION && closeness > 0.6) {
             this.shakeAmount = closeness * 0.8;
           }
