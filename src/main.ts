@@ -736,6 +736,8 @@ class UI {
 
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Space' || e.code === 'Enter') {
+        // Let a focused link (the iMidlalo back-link) do its own thing.
+        if ((e.target as HTMLElement | null)?.closest?.('a')) return;
         if (!this.startScreen.classList.contains('hidden')) {
           e.preventDefault();
           this.onStart?.();
