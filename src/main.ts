@@ -1309,8 +1309,11 @@ class AbyssGame {
     canvas.addEventListener('pointermove', (e) => {
       if (!this.alive || this.paused) return;
       if (this.dragActive) {
-        const dx = (e.clientX - this.dragOriginX) / innerWidth;
-        const dy = (e.clientY - this.dragOriginY) / innerHeight;
+        // Same scale on both axes so a thumb-length of travel steers equally
+        // far up/down as left/right on a portrait phone.
+        const span = Math.min(innerWidth, innerHeight);
+        const dx = (e.clientX - this.dragOriginX) / span;
+        const dy = (e.clientY - this.dragOriginY) / span;
         this.pointerX = Math.min(1, Math.max(0, this.aimAtDragStartX + dx * TOUCH_AIM_SENS));
         this.pointerY = Math.min(1, Math.max(0, this.aimAtDragStartY + dy * TOUCH_AIM_SENS));
       } else if (!USE_RELATIVE_AIM && e.pointerType !== 'touch') {
