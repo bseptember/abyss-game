@@ -69,7 +69,7 @@ const PALETTE = [
   new THREE.Color(0x00e5ff),   // cyan
   new THREE.Color(0x6366f1),   // indigo
   new THREE.Color(0xc026d3),   // fuchsia
-  new THREE.Color(0xe0e7ff),   // ice (not rose: red is reserved for barriers)
+  new THREE.Color(0x3b82f6),   // azure (not rose: red is reserved for barriers)
   new THREE.Color(0xfbbf24),   // amber
 ];
 
