@@ -36,6 +36,7 @@ const SPEED_MAX = 130;
 const SPEED_ACCEL = 0.7;   // gentle but noticeable build so runs gain intensity
 
 const TOUCH_AIM_SENS = 1.35; // relative-drag gain (screen fractions → aim)
+const KEY_AIM_SPEED = 1.8;   // keyboard aim travel per second (screen fractions)
 
 // ─── Visual overhaul: tunnel walls + distance-fade ramp ────
 const WALL_RADIUS = 10.6;   // just outside the play field
@@ -1334,9 +1335,9 @@ class AbyssGame {
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
   }
 
-  private pollKeys() {
+  private pollKeys(dt: number) {
     if (!this.alive || this.paused) return;
-    const step = 0.03;
+    const step = KEY_AIM_SPEED * dt; // frame-rate independent (0.03/frame at 60 fps)
     if (this.keys.has('a') || this.keys.has('arrowleft'))  this.pointerX = Math.max(0, this.pointerX - step);
     if (this.keys.has('d') || this.keys.has('arrowright')) this.pointerX = Math.min(1, this.pointerX + step);
     if (this.keys.has('w') || this.keys.has('arrowup'))    this.pointerY = Math.max(0, this.pointerY - step);
@@ -1590,7 +1591,7 @@ class AbyssGame {
   }
 
   private update(dt: number) {
-    this.pollKeys();
+    this.pollKeys(dt);
 
     this.speed = Math.min(this.speed + SPEED_ACCEL * dt, SPEED_MAX);
     const speedT = (this.speed - SPEED_INIT) / (SPEED_MAX - SPEED_INIT);
