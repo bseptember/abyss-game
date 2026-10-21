@@ -88,6 +88,12 @@
       <p class="restart-hint">Press SPACE or tap the button to restart</p>
       <a class="hub-link" href="https://imidlalo.co.za/">&larr; iMidlalo</a>
     </div>
+
+    <!-- Fullscreen toggle: touch devices only (shown from main.ts when supported) -->
+    <button type="button" id="fs-btn" class="icon-btn fs-btn" hidden aria-label="Full screen" aria-pressed="false">
+      <svg class="fs-enter" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <svg class="fs-exit" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
   </div>
 
   <canvas id="game-canvas" aria-label="ABYSS game view"></canvas>
