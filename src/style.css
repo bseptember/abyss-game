@@ -625,6 +625,32 @@ html, body {
   animation: pulse-glow 2s ease-in-out infinite;
 }
 
+/* Back to the iMidlalo hub (start + game-over panels) */
+.hub-link {
+  pointer-events: auto;
+  display: inline-block;
+  margin-top: 1.2rem;
+  padding: 0.4rem 0.8rem;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.65rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: rgba(255, 255, 255, 0.45);
+  transition: color 0.2s ease;
+}
+
+.hub-link:hover,
+.hub-link:focus-visible {
+  color: var(--cyan);
+  outline: none;
+}
+
+.hub-link:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 3px;
+}
+
 /* ─── Milestone Callout ─────────────── */
 
 #milestone {
