@@ -2025,7 +2025,54 @@ class AbyssGame {
   }
 }
 
+// ─── Fullscreen toggle ─────────────────────────────────────
+// Phones have no F11. Touch devices only, and only where element fullscreen
+// exists (iPhone Safari has none, so the button never appears there).
+
+type FsDocument = Document & {
+  webkitFullscreenEnabled?: boolean;
+  webkitFullscreenElement?: Element | null;
+  webkitExitFullscreen?: () => Promise<void> | void;
+};
+type FsElement = HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void };
+
+function setupFullscreenToggle() {
+  const btn = document.getElementById('fs-btn');
+  const doc = document as FsDocument;
+  const root = document.documentElement as FsElement;
+  if (!btn || !matchMedia('(pointer: coarse)').matches) return;
+  if (!(doc.fullscreenEnabled || doc.webkitFullscreenEnabled)) return;
+
+  const isFullscreen = () => !!(doc.fullscreenElement || doc.webkitFullscreenElement);
+  const sync = () => {
+    const on = isFullscreen();
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.setAttribute('aria-label', on ? 'Exit full screen' : 'Full screen');
+  };
+
+  // Never let the tap reach the canvas (steering) or the global Space/Enter handler.
+  const stop = (e: Event) => e.stopPropagation();
+  btn.addEventListener('pointerdown', stop);
+  btn.addEventListener('touchstart', stop, { passive: true });
+  btn.addEventListener('keydown', stop);
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    try {
+      const p = isFullscreen()
+        ? (doc.exitFullscreen ? doc.exitFullscreen() : doc.webkitExitFullscreen?.())
+        : (root.requestFullscreen ? root.requestFullscreen({ navigationUI: 'hide' }) : root.webkitRequestFullscreen?.());
+      Promise.resolve(p).catch(() => { /* denied or interrupted */ });
+    } catch { /* unsupported */ }
+  });
+  document.addEventListener('fullscreenchange', sync);
+  document.addEventListener('webkitfullscreenchange', sync);
+  sync();
+  btn.hidden = false;
+}
+
 // ─── Init ──────────────────────────────────────────────────
+
+setupFullscreenToggle();
 
 const ui = new UI();
 const game = new AbyssGame(ui);
