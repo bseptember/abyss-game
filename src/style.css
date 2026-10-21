@@ -748,6 +748,71 @@ html, body {
   }
 }
 
+/* Short screens (landscape phones): tighten the start and game-over panels and
+   let them scroll. Auto margins on the first/last child centre the content when
+   it fits; unlike justify-content: center, they never push it above the top. */
+@media (max-height: 500px) {
+  #start-screen,
+  #game-over {
+    justify-content: flex-start;
+    overflow-y: auto;
+    touch-action: pan-y;
+    padding-top: calc(1rem + var(--safe-top));
+    padding-bottom: calc(1rem + var(--safe-bottom));
+  }
+
+  #start-screen > :first-child,
+  #game-over > :first-child {
+    margin-top: auto;
+  }
+
+  #start-screen > :last-child,
+  #game-over > :last-child {
+    margin-bottom: auto;
+  }
+
+  #start-screen h1 {
+    font-size: clamp(2.2rem, 17vh, 5rem);
+  }
+
+  .subtitle {
+    margin-bottom: 1rem;
+  }
+
+  .how-to-play {
+    margin-bottom: 1rem;
+  }
+
+  .how-to-play p {
+    margin-bottom: 0.3rem;
+  }
+
+  .controls-hint {
+    margin-top: 0.8rem;
+  }
+
+  #game-over h1 {
+    font-size: clamp(1.5rem, 10vh, 3rem);
+    margin-bottom: 0.6rem;
+  }
+
+  #best-score {
+    margin-bottom: 0.8rem;
+  }
+
+  .run-stats {
+    margin-bottom: 0.8rem;
+  }
+
+  #leaderboard {
+    margin-bottom: 1rem;
+  }
+
+  .restart-hint {
+    margin-top: 0.8rem;
+  }
+}
+
 /* ─── Reduced Motion ────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
