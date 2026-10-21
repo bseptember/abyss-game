@@ -371,6 +371,27 @@ html, body {
   color: var(--cyan);
 }
 
+/* Fullscreen toggle — bottom-right, mirrors the pause button */
+.fs-btn {
+  left: auto;
+  right: calc(1.1rem + var(--safe-right));
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.fs-btn[hidden],
+.fs-btn .fs-exit,
+.fs-btn[aria-pressed="true"] .fs-enter {
+  display: none;
+}
+
+.fs-btn[aria-pressed="true"] .fs-exit {
+  display: block;
+}
+
 /* ─── Pause ─────────────────────────── */
 
 #pause-screen {
@@ -623,6 +644,32 @@ html, body {
   letter-spacing: 0.2em;
   text-transform: uppercase;
   animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Back to the iMidlalo hub (start + game-over panels) */
+.hub-link {
+  pointer-events: auto;
+  display: inline-block;
+  margin-top: 1.2rem;
+  padding: 0.4rem 0.8rem;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.65rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: rgba(255, 255, 255, 0.45);
+  transition: color 0.2s ease;
+}
+
+.hub-link:hover,
+.hub-link:focus-visible {
+  color: var(--cyan);
+  outline: none;
+}
+
+.hub-link:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 3px;
 }
 
 /* ─── Milestone Callout ─────────────── */

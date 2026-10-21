@@ -36,6 +36,7 @@ const SPEED_MAX = 130;
 const SPEED_ACCEL = 0.7;   // gentle but noticeable build so runs gain intensity
 
 const TOUCH_AIM_SENS = 1.35; // relative-drag gain (screen fractions → aim)
+const KEY_AIM_SPEED = 1.8;   // keyboard aim travel per second (screen fractions)
 
 // ─── Visual overhaul: tunnel walls + distance-fade ramp ────
 const WALL_RADIUS = 10.6;   // just outside the play field
@@ -68,7 +69,7 @@ const PALETTE = [
   new THREE.Color(0x00e5ff),   // cyan
   new THREE.Color(0x6366f1),   // indigo
   new THREE.Color(0xc026d3),   // fuchsia
-  new THREE.Color(0xf43f5e),   // rose
+  new THREE.Color(0x3b82f6),   // azure (not rose: red is reserved for barriers)
   new THREE.Color(0xfbbf24),   // amber
 ];
 
@@ -735,6 +736,8 @@ class UI {
 
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Space' || e.code === 'Enter') {
+        // Let a focused link (the iMidlalo back-link) do its own thing.
+        if ((e.target as HTMLElement | null)?.closest?.('a')) return;
         if (!this.startScreen.classList.contains('hidden')) {
           e.preventDefault();
           this.onStart?.();
@@ -1308,8 +1311,11 @@ class AbyssGame {
     canvas.addEventListener('pointermove', (e) => {
       if (!this.alive || this.paused) return;
       if (this.dragActive) {
-        const dx = (e.clientX - this.dragOriginX) / innerWidth;
-        const dy = (e.clientY - this.dragOriginY) / innerHeight;
+        // Same scale on both axes so a thumb-length of travel steers equally
+        // far up/down as left/right on a portrait phone.
+        const span = Math.min(innerWidth, innerHeight);
+        const dx = (e.clientX - this.dragOriginX) / span;
+        const dy = (e.clientY - this.dragOriginY) / span;
         this.pointerX = Math.min(1, Math.max(0, this.aimAtDragStartX + dx * TOUCH_AIM_SENS));
         this.pointerY = Math.min(1, Math.max(0, this.aimAtDragStartY + dy * TOUCH_AIM_SENS));
       } else if (!USE_RELATIVE_AIM && e.pointerType !== 'touch') {
@@ -1334,9 +1340,9 @@ class AbyssGame {
     window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
   }
 
-  private pollKeys() {
+  private pollKeys(dt: number) {
     if (!this.alive || this.paused) return;
-    const step = 0.03;
+    const step = KEY_AIM_SPEED * dt; // frame-rate independent (0.03/frame at 60 fps)
     if (this.keys.has('a') || this.keys.has('arrowleft'))  this.pointerX = Math.max(0, this.pointerX - step);
     if (this.keys.has('d') || this.keys.has('arrowright')) this.pointerX = Math.min(1, this.pointerX + step);
     if (this.keys.has('w') || this.keys.has('arrowup'))    this.pointerY = Math.max(0, this.pointerY - step);
@@ -1590,7 +1596,7 @@ class AbyssGame {
   }
 
   private update(dt: number) {
-    this.pollKeys();
+    this.pollKeys(dt);
 
     this.speed = Math.min(this.speed + SPEED_ACCEL * dt, SPEED_MAX);
     const speedT = (this.speed - SPEED_INIT) / (SPEED_MAX - SPEED_INIT);
@@ -1823,7 +1829,8 @@ class AbyssGame {
 
           this.gapSize = Math.max(this.gapSize - GATE_GAP_SHRINK, GATE_MIN_GAP);
 
-          const closeness = 1 - Math.abs(diff) / halfGap;
+          // 0 = dead centre of the gap, 1 = grazing the barrier edge.
+          const closeness = Math.abs(diff) / halfGap;
           if (!REDUCE_MOTION && closeness > 0.6) {
             this.shakeAmount = closeness * 0.8;
           }
@@ -2018,7 +2025,54 @@ class AbyssGame {
   }
 }
 
+// ─── Fullscreen toggle ─────────────────────────────────────
+// Phones have no F11. Touch devices only, and only where element fullscreen
+// exists (iPhone Safari has none, so the button never appears there).
+
+type FsDocument = Document & {
+  webkitFullscreenEnabled?: boolean;
+  webkitFullscreenElement?: Element | null;
+  webkitExitFullscreen?: () => Promise<void> | void;
+};
+type FsElement = HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void };
+
+function setupFullscreenToggle() {
+  const btn = document.getElementById('fs-btn');
+  const doc = document as FsDocument;
+  const root = document.documentElement as FsElement;
+  if (!btn || !matchMedia('(pointer: coarse)').matches) return;
+  if (!(doc.fullscreenEnabled || doc.webkitFullscreenEnabled)) return;
+
+  const isFullscreen = () => !!(doc.fullscreenElement || doc.webkitFullscreenElement);
+  const sync = () => {
+    const on = isFullscreen();
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.setAttribute('aria-label', on ? 'Exit full screen' : 'Full screen');
+  };
+
+  // Never let the tap reach the canvas (steering) or the global Space/Enter handler.
+  const stop = (e: Event) => e.stopPropagation();
+  btn.addEventListener('pointerdown', stop);
+  btn.addEventListener('touchstart', stop, { passive: true });
+  btn.addEventListener('keydown', stop);
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    try {
+      const p = isFullscreen()
+        ? (doc.exitFullscreen ? doc.exitFullscreen() : doc.webkitExitFullscreen?.())
+        : (root.requestFullscreen ? root.requestFullscreen({ navigationUI: 'hide' }) : root.webkitRequestFullscreen?.());
+      Promise.resolve(p).catch(() => { /* denied or interrupted */ });
+    } catch { /* unsupported */ }
+  });
+  document.addEventListener('fullscreenchange', sync);
+  document.addEventListener('webkitfullscreenchange', sync);
+  sync();
+  btn.hidden = false;
+}
+
 // ─── Init ──────────────────────────────────────────────────
+
+setupFullscreenToggle();
 
 const ui = new UI();
 const game = new AbyssGame(ui);
