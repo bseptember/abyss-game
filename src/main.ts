@@ -9,6 +9,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import './style.css';
 
 // ─── Constants ─────────────────────────────────────────────
@@ -465,6 +466,10 @@ const SAFE_COLOR = new THREE.Color(0x00ff88);
 const SAFE_EDGE_RADII = [TUNNEL_RADIUS * 0.95, TUNNEL_RADIUS * 0.7, TUNNEL_RADIUS * 0.45, 0.5];
 
 // Per-gate material collections so updateGates() can ramp visibility by distance.
+// Each gate is built as a handful of merged meshes (not ~17 separate ones): draw
+// calls, not triangles, are what a weak phone CPU chokes on. Per-part opacity
+// lives in a vertex-colour alpha channel (baseOpacity is the shared factor), so
+// the blended result is identical to the old one-mesh-per-part layout.
 interface GateMats {
   barrier: THREE.MeshBasicMaterial[];  // solid rings + disc
   rim: THREE.MeshBasicMaterial;        // outer rim
@@ -482,31 +487,53 @@ function clearGroup(group: THREE.Group) {
   }
 }
 
+/** Bake a constant RGBA vertex colour so parts can share one mesh and material. */
+function tintGeo(geo: THREE.BufferGeometry, color: THREE.Color, alpha: number): THREE.BufferGeometry {
+  const n = geo.getAttribute('position').count;
+  const rgba = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    rgba[i * 4] = color.r;
+    rgba[i * 4 + 1] = color.g;
+    rgba[i * 4 + 2] = color.b;
+    rgba[i * 4 + 3] = alpha;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(rgba, 4));
+  return geo;
+}
+
+function mergeParts(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const merged = mergeGeometries(parts, false) as THREE.BufferGeometry;
+  for (const g of parts) g.dispose();
+  return merged;
+}
+
+function gateMaterial(side: THREE.Side, opacity: number): THREE.MeshBasicMaterial {
+  return new THREE.MeshBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity,
+    side,
+    depthWrite: false,
+  });
+}
+
 function fillGate(group: THREE.Group, gapSize: number): GateMats {
   clearGroup(group);
 
   const barrierLen = TAU - gapSize;
   const radialSegs = LOW_POWER ? 32 : 48;
-  const barrier: THREE.MeshBasicMaterial[] = [];
-  const safe: THREE.MeshBasicMaterial[] = [];
-  let rim: THREE.MeshBasicMaterial;
 
   // Concentric barrier rings — alternating opacity as non-color danger cue
+  const ringParts: THREE.BufferGeometry[] = [];
   let ringIdx = 0;
   for (let r = 0.5; r <= TUNNEL_RADIUS; r += BARRIER_RING_STEP) {
     const geo = new THREE.TorusGeometry(r, 0.12, 6, radialSegs, barrierLen);
-    const mat = new THREE.MeshBasicMaterial({
-      color: DANGER_COLOR,
-      transparent: true,
-      opacity: ringIdx % 2 === 0 ? 0.85 : 0.5,
-      depthWrite: false,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.rotation.z = gapSize / 2;
-    group.add(mesh);
-    barrier.push(mat);
+    geo.rotateZ(gapSize / 2);
+    ringParts.push(tintGeo(geo, DANGER_COLOR, ringIdx % 2 === 0 ? 0.85 : 0.5));
     ringIdx++;
   }
+  const ringsMat = gateMaterial(THREE.FrontSide, 1);
+  group.add(new THREE.Mesh(mergeParts(ringParts), ringsMat));
 
   // Barrier disc — deep crimson (not bright), so the GAP pops, not the wall
   const discGeo = new THREE.RingGeometry(0.01, TUNNEL_RADIUS, radialSegs, 1, gapSize / 2, barrierLen);
@@ -518,64 +545,44 @@ function fillGate(group: THREE.Group, gapSize: number): GateMats {
     depthWrite: false,
   });
   group.add(new THREE.Mesh(discGeo, discMat));
-  barrier.push(discMat);
 
-  // Outer rim
+  // Outer rim (kept separate: it alone writes depth and has its own opacity ramp)
   const rimGeo = new THREE.TorusGeometry(TUNNEL_RADIUS, 0.22, 6, radialSegs, barrierLen);
-  rim = new THREE.MeshBasicMaterial({ color: 0xff5544, transparent: true, opacity: 0.9 });
+  const rim = new THREE.MeshBasicMaterial({ color: 0xff5544, transparent: true, opacity: 0.9 });
   const rimMesh = new THREE.Mesh(rimGeo, rim);
   rimMesh.rotation.z = gapSize / 2;
   group.add(rimMesh);
 
   // Safe-gap arcs (extra rings = shape cue beyond color)
+  const arcParts: THREE.BufferGeometry[] = [];
   for (const edgeR of SAFE_EDGE_RADII) {
     const tube = edgeR > TUNNEL_RADIUS * 0.8 ? 0.18 : 0.12;
     const arcGeo = new THREE.TorusGeometry(edgeR, tube, 6, 28, gapSize);
-    const mat = new THREE.MeshBasicMaterial({
-      color: SAFE_COLOR,
-      transparent: true,
-      opacity: 1,
-      depthWrite: false,
-    });
-    const arc = new THREE.Mesh(arcGeo, mat);
-    arc.rotation.z = -gapSize / 2;
-    group.add(arc);
-    safe.push(mat);
+    arcGeo.rotateZ(-gapSize / 2);
+    arcParts.push(tintGeo(arcGeo, SAFE_COLOR, 1));
   }
+  const arcsMat = gateMaterial(THREE.FrontSide, 1);
+  group.add(new THREE.Mesh(mergeParts(arcParts), arcsMat));
 
-  // Gap edge bars — bright radial markers (chevrons via thickness)
+  // Gap edge bars — bright radial markers, plus a thicker chevron mark near the rim
+  const barParts: THREE.BufferGeometry[] = [];
   for (const side of [-1, 1] as const) {
     const edgeAngle = (gapSize / 2) * side;
     const barGeo = new THREE.PlaneGeometry(0.22, TUNNEL_RADIUS * 2);
-    const barMat = new THREE.MeshBasicMaterial({
-      color: SAFE_COLOR,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 1,
-      depthWrite: false,
-    });
-    const bar = new THREE.Mesh(barGeo, barMat);
-    bar.position.set(
-      Math.cos(edgeAngle) * TUNNEL_RADIUS * 0.5,
-      Math.sin(edgeAngle) * TUNNEL_RADIUS * 0.5,
-      0,
-    );
-    bar.rotation.z = edgeAngle;
-    group.add(bar);
+    barGeo.rotateZ(edgeAngle);
+    barGeo.translate(Math.cos(edgeAngle) * TUNNEL_RADIUS * 0.5, Math.sin(edgeAngle) * TUNNEL_RADIUS * 0.5, 0);
+    barParts.push(tintGeo(barGeo, SAFE_COLOR, 1));
 
-    // Second thicker chevron mark near the rim
     const tipGeo = new THREE.PlaneGeometry(0.35, 1.2);
-    const tip = new THREE.Mesh(tipGeo, barMat.clone());
-    tip.position.set(
-      Math.cos(edgeAngle) * TUNNEL_RADIUS * 0.92,
-      Math.sin(edgeAngle) * TUNNEL_RADIUS * 0.92,
-      0.05,
-    );
-    tip.rotation.z = edgeAngle;
-    group.add(tip);
-
-    safe.push(barMat, tip.material as THREE.MeshBasicMaterial);
+    tipGeo.rotateZ(edgeAngle);
+    tipGeo.translate(Math.cos(edgeAngle) * TUNNEL_RADIUS * 0.92, Math.sin(edgeAngle) * TUNNEL_RADIUS * 0.92, 0.05);
+    barParts.push(tintGeo(tipGeo, SAFE_COLOR, 1));
   }
+  const barsMat = gateMaterial(THREE.DoubleSide, 1);
+  group.add(new THREE.Mesh(mergeParts(barParts), barsMat));
+
+  const barrier = [ringsMat, discMat];
+  const safe = [arcsMat, barsMat];
 
   // Record base opacities so the distance ramp in updateGates() can scale them
   for (const m of barrier) m.userData.baseOpacity = m.opacity;
