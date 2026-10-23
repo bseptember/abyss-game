@@ -9,6 +9,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import './style.css';
 
 // ─── Constants ─────────────────────────────────────────────
@@ -51,6 +52,13 @@ const USE_RELATIVE_AIM = matchMedia('(pointer: coarse)').matches || IS_MOBILE;
 const REDUCE_MOTION = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const LOW_POWER = IS_MOBILE || (navigator.hardwareConcurrency ?? 8) <= 4;
 const MAX_DPR = LOW_POWER ? 1.25 : 1.75;
+// Adaptive resolution (phones only): if frames stay slow, step the render scale down
+// toward ADAPT_MIN_DPR; if they recover, step back up. Gameplay is dt-based, so only
+// sharpness changes.
+const ADAPT_MIN_DPR = 0.75;
+const ADAPT_STEP = 0.85;
+const ADAPT_SLOW_FRAME = 1 / 29;    // EMA slower than ~29 fps -> drop a step
+const ADAPT_FAST_FRAME = 1 / 51;    // EMA faster than ~51 fps for a while -> try a step back up
 const TRAIL_COUNT = LOW_POWER ? 180 : 320;
 const STAR_COUNT = LOW_POWER ? 1200 : 2200;
 const USE_BLOOM = !LOW_POWER;
@@ -99,37 +107,13 @@ function setPanelVisible(el: HTMLElement, visible: boolean) {
 
 // ─── Shaders ───────────────────────────────────────────────
 
-const ChromaShader = {
+// Chromatic fringe + vignette in ONE full-screen pass (they used to be two passes
+// and an extra render target — the biggest fill cost on a weak phone GPU).
+// Output is identical to running them back to back.
+const GradeShader = {
   uniforms: {
     tDiffuse: { value: null as THREE.Texture | null },
     amount: { value: 0.003 },
-  },
-  vertexShader: /* glsl */ `
-    varying vec2 vUv;
-    void main() {
-      vUv = uv;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }
-  `,
-  fragmentShader: /* glsl */ `
-    uniform sampler2D tDiffuse;
-    uniform float amount;
-    varying vec2 vUv;
-    void main() {
-      vec2 d = amount * (vUv - 0.5);
-      gl_FragColor = vec4(
-        texture2D(tDiffuse, vUv + d).r,
-        texture2D(tDiffuse, vUv).g,
-        texture2D(tDiffuse, vUv - d).b,
-        1.0
-      );
-    }
-  `,
-};
-
-const VignetteShader = {
-  uniforms: {
-    tDiffuse: { value: null as THREE.Texture | null },
     darkness: { value: 1.15 },
     offset: { value: 1.12 },
   },
@@ -142,14 +126,20 @@ const VignetteShader = {
   `,
   fragmentShader: /* glsl */ `
     uniform sampler2D tDiffuse;
+    uniform float amount;
     uniform float darkness;
     uniform float offset;
     varying vec2 vUv;
     void main() {
-      vec4 c = texture2D(tDiffuse, vUv);
-      float d = length((vUv - 0.5) * 2.0);
-      float v = smoothstep(offset, offset - 0.45, d * (darkness + offset));
-      gl_FragColor = vec4(c.rgb * v, 1.0);
+      vec2 d = amount * (vUv - 0.5);
+      vec3 c = vec3(
+        texture2D(tDiffuse, vUv + d).r,
+        texture2D(tDiffuse, vUv).g,
+        texture2D(tDiffuse, vUv - d).b
+      );
+      float dist = length((vUv - 0.5) * 2.0);
+      float v = smoothstep(offset, offset - 0.45, dist * (darkness + offset));
+      gl_FragColor = vec4(c * v, 1.0);
     }
   `,
 };
@@ -465,6 +455,10 @@ const SAFE_COLOR = new THREE.Color(0x00ff88);
 const SAFE_EDGE_RADII = [TUNNEL_RADIUS * 0.95, TUNNEL_RADIUS * 0.7, TUNNEL_RADIUS * 0.45, 0.5];
 
 // Per-gate material collections so updateGates() can ramp visibility by distance.
+// Each gate is built as a handful of merged meshes (not ~17 separate ones): draw
+// calls, not triangles, are what a weak phone CPU chokes on. Per-part opacity
+// lives in a vertex-colour alpha channel (baseOpacity is the shared factor), so
+// the blended result is identical to the old one-mesh-per-part layout.
 interface GateMats {
   barrier: THREE.MeshBasicMaterial[];  // solid rings + disc
   rim: THREE.MeshBasicMaterial;        // outer rim
@@ -482,31 +476,53 @@ function clearGroup(group: THREE.Group) {
   }
 }
 
+/** Bake a constant RGBA vertex colour so parts can share one mesh and material. */
+function tintGeo(geo: THREE.BufferGeometry, color: THREE.Color, alpha: number): THREE.BufferGeometry {
+  const n = geo.getAttribute('position').count;
+  const rgba = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    rgba[i * 4] = color.r;
+    rgba[i * 4 + 1] = color.g;
+    rgba[i * 4 + 2] = color.b;
+    rgba[i * 4 + 3] = alpha;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(rgba, 4));
+  return geo;
+}
+
+function mergeParts(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const merged = mergeGeometries(parts, false) as THREE.BufferGeometry;
+  for (const g of parts) g.dispose();
+  return merged;
+}
+
+function gateMaterial(side: THREE.Side, opacity: number): THREE.MeshBasicMaterial {
+  return new THREE.MeshBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity,
+    side,
+    depthWrite: false,
+  });
+}
+
 function fillGate(group: THREE.Group, gapSize: number): GateMats {
   clearGroup(group);
 
   const barrierLen = TAU - gapSize;
   const radialSegs = LOW_POWER ? 32 : 48;
-  const barrier: THREE.MeshBasicMaterial[] = [];
-  const safe: THREE.MeshBasicMaterial[] = [];
-  let rim: THREE.MeshBasicMaterial;
 
   // Concentric barrier rings — alternating opacity as non-color danger cue
+  const ringParts: THREE.BufferGeometry[] = [];
   let ringIdx = 0;
   for (let r = 0.5; r <= TUNNEL_RADIUS; r += BARRIER_RING_STEP) {
     const geo = new THREE.TorusGeometry(r, 0.12, 6, radialSegs, barrierLen);
-    const mat = new THREE.MeshBasicMaterial({
-      color: DANGER_COLOR,
-      transparent: true,
-      opacity: ringIdx % 2 === 0 ? 0.85 : 0.5,
-      depthWrite: false,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.rotation.z = gapSize / 2;
-    group.add(mesh);
-    barrier.push(mat);
+    geo.rotateZ(gapSize / 2);
+    ringParts.push(tintGeo(geo, DANGER_COLOR, ringIdx % 2 === 0 ? 0.85 : 0.5));
     ringIdx++;
   }
+  const ringsMat = gateMaterial(THREE.FrontSide, 1);
+  group.add(new THREE.Mesh(mergeParts(ringParts), ringsMat));
 
   // Barrier disc — deep crimson (not bright), so the GAP pops, not the wall
   const discGeo = new THREE.RingGeometry(0.01, TUNNEL_RADIUS, radialSegs, 1, gapSize / 2, barrierLen);
@@ -518,64 +534,44 @@ function fillGate(group: THREE.Group, gapSize: number): GateMats {
     depthWrite: false,
   });
   group.add(new THREE.Mesh(discGeo, discMat));
-  barrier.push(discMat);
 
-  // Outer rim
+  // Outer rim (kept separate: it alone writes depth and has its own opacity ramp)
   const rimGeo = new THREE.TorusGeometry(TUNNEL_RADIUS, 0.22, 6, radialSegs, barrierLen);
-  rim = new THREE.MeshBasicMaterial({ color: 0xff5544, transparent: true, opacity: 0.9 });
+  const rim = new THREE.MeshBasicMaterial({ color: 0xff5544, transparent: true, opacity: 0.9 });
   const rimMesh = new THREE.Mesh(rimGeo, rim);
   rimMesh.rotation.z = gapSize / 2;
   group.add(rimMesh);
 
   // Safe-gap arcs (extra rings = shape cue beyond color)
+  const arcParts: THREE.BufferGeometry[] = [];
   for (const edgeR of SAFE_EDGE_RADII) {
     const tube = edgeR > TUNNEL_RADIUS * 0.8 ? 0.18 : 0.12;
     const arcGeo = new THREE.TorusGeometry(edgeR, tube, 6, 28, gapSize);
-    const mat = new THREE.MeshBasicMaterial({
-      color: SAFE_COLOR,
-      transparent: true,
-      opacity: 1,
-      depthWrite: false,
-    });
-    const arc = new THREE.Mesh(arcGeo, mat);
-    arc.rotation.z = -gapSize / 2;
-    group.add(arc);
-    safe.push(mat);
+    arcGeo.rotateZ(-gapSize / 2);
+    arcParts.push(tintGeo(arcGeo, SAFE_COLOR, 1));
   }
+  const arcsMat = gateMaterial(THREE.FrontSide, 1);
+  group.add(new THREE.Mesh(mergeParts(arcParts), arcsMat));
 
-  // Gap edge bars — bright radial markers (chevrons via thickness)
+  // Gap edge bars — bright radial markers, plus a thicker chevron mark near the rim
+  const barParts: THREE.BufferGeometry[] = [];
   for (const side of [-1, 1] as const) {
     const edgeAngle = (gapSize / 2) * side;
     const barGeo = new THREE.PlaneGeometry(0.22, TUNNEL_RADIUS * 2);
-    const barMat = new THREE.MeshBasicMaterial({
-      color: SAFE_COLOR,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 1,
-      depthWrite: false,
-    });
-    const bar = new THREE.Mesh(barGeo, barMat);
-    bar.position.set(
-      Math.cos(edgeAngle) * TUNNEL_RADIUS * 0.5,
-      Math.sin(edgeAngle) * TUNNEL_RADIUS * 0.5,
-      0,
-    );
-    bar.rotation.z = edgeAngle;
-    group.add(bar);
+    barGeo.rotateZ(edgeAngle);
+    barGeo.translate(Math.cos(edgeAngle) * TUNNEL_RADIUS * 0.5, Math.sin(edgeAngle) * TUNNEL_RADIUS * 0.5, 0);
+    barParts.push(tintGeo(barGeo, SAFE_COLOR, 1));
 
-    // Second thicker chevron mark near the rim
     const tipGeo = new THREE.PlaneGeometry(0.35, 1.2);
-    const tip = new THREE.Mesh(tipGeo, barMat.clone());
-    tip.position.set(
-      Math.cos(edgeAngle) * TUNNEL_RADIUS * 0.92,
-      Math.sin(edgeAngle) * TUNNEL_RADIUS * 0.92,
-      0.05,
-    );
-    tip.rotation.z = edgeAngle;
-    group.add(tip);
-
-    safe.push(barMat, tip.material as THREE.MeshBasicMaterial);
+    tipGeo.rotateZ(edgeAngle);
+    tipGeo.translate(Math.cos(edgeAngle) * TUNNEL_RADIUS * 0.92, Math.sin(edgeAngle) * TUNNEL_RADIUS * 0.92, 0.05);
+    barParts.push(tintGeo(tipGeo, SAFE_COLOR, 1));
   }
+  const barsMat = gateMaterial(THREE.DoubleSide, 1);
+  group.add(new THREE.Mesh(mergeParts(barParts), barsMat));
+
+  const barrier = [ringsMat, discMat];
+  const safe = [arcsMat, barsMat];
 
   // Record base opacities so the distance ramp in updateGates() can scale them
   for (const m of barrier) m.userData.baseOpacity = m.opacity;
@@ -997,6 +993,13 @@ class AbyssGame {
   private isTransitioning = false;
   private gameOverShown = false;
   private tabHidden = false;
+  private dprCap = MAX_DPR;          // current render-scale cap (lowered by adaptResolution on phones)
+  private frameEma = 1 / 60;
+  private adaptClock = 0;
+  private adaptGood = 0;
+  private adaptDrops = 0;
+  private adaptProbe: number | null = null;  // frame EMA just before the last step down, to check it helped
+  private adaptLocked = false;
 
   // Input
   private pointerX = 0.5;
@@ -1038,7 +1041,7 @@ class AbyssGame {
       powerPreference: 'high-performance',
     });
     this.renderer.setSize(innerWidth, innerHeight);
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, MAX_DPR));
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, this.dprCap));
     this.renderer.setClearColor(0x000008);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
@@ -1054,11 +1057,11 @@ class AbyssGame {
     );
     if (USE_BLOOM) this.composer.addPass(this.bloomPass);
 
-    this.chromaPass = new ShaderPass(ChromaShader as any);
+    // One pass drives both the chroma fringe (uniforms.amount) and the vignette
+    // (uniforms.darkness/offset); both fields point at it so call sites stay as-is.
+    this.chromaPass = new ShaderPass(GradeShader as any);
+    this.vignettePass = this.chromaPass;
     this.composer.addPass(this.chromaPass);
-
-    this.vignettePass = new ShaderPass(VignetteShader as any);
-    this.composer.addPass(this.vignettePass);
 
     this.buildTunnel();
     this.buildGates();
@@ -1491,6 +1494,10 @@ class AbyssGame {
     this.ui.markScoreBest(false);
 
     this.lastTime = performance.now();
+    this.frameEma = 1 / 60;
+    this.adaptClock = -2;                      // ~3 s warm-up: shader compiles and uploads cause start-up stalls
+    this.adaptGood = 0;
+    this.adaptProbe = null;
     this.gameLoop();
   }
 
@@ -1587,6 +1594,7 @@ class AbyssGame {
     const now = performance.now();
     let dt = (now - this.lastTime) / 1000;
     this.lastTime = now;
+    this.adaptResolution(dt);
     dt = Math.min(dt, 0.05);
 
     this.update(dt);
@@ -2019,10 +2027,58 @@ class AbyssGame {
     this.camera.aspect = innerWidth / innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(innerWidth, innerHeight);
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, MAX_DPR));
+    const pr = Math.min(devicePixelRatio, this.dprCap);
+    this.renderer.setPixelRatio(pr);
+    this.composer.setPixelRatio(pr);
     this.composer.setSize(innerWidth, innerHeight);
     if (USE_BLOOM) this.bloomPass.resolution.set(innerWidth, innerHeight);
   }
+
+  /**
+   * Phones only: trade sharpness for frame rate when frames stay slow, and back again.
+   * Each step down has to prove itself: if it doesn't speed frames up (the phone is
+   * limited by something other than fill rate), it is undone and adapting stops.
+   */
+  private adaptResolution(rawDt: number) {
+    if (!LOW_POWER || this.adaptLocked || rawDt > 0.25) return;   // ignore resume / tab-switch hitches
+    this.frameEma += (rawDt - this.frameEma) * 0.08;
+    this.adaptClock += rawDt;
+    if (this.adaptClock < 1) return;           // decide at most once a second
+    this.adaptClock = 0;
+
+    if (this.adaptProbe !== null) {
+      const before = this.adaptProbe;
+      this.adaptProbe = null;
+      if (this.frameEma > before * 0.92) {
+        // Less than 8% faster: resolution isn't the bottleneck. Undo and stop.
+        this.dprCap = Math.min(MAX_DPR, this.dprCap / ADAPT_STEP);
+        this.adaptLocked = true;
+        this.onResize();
+        return;
+      }
+    }
+
+    if (this.frameEma > ADAPT_SLOW_FRAME && this.dprCap > ADAPT_MIN_DPR) {
+      this.adaptProbe = this.frameEma;
+      this.dprCap = Math.max(ADAPT_MIN_DPR, this.dprCap * ADAPT_STEP);
+      this.adaptGood = 0;
+      this.adaptDrops++;
+      this.adaptClock = -2;                    // let the new size settle before judging it
+      this.onResize();
+    } else if (this.frameEma < ADAPT_FAST_FRAME && this.dprCap < MAX_DPR && this.adaptDrops < 3) {
+      // Only climb back after a long stretch of fast frames, and give up after a
+      // few drops so a borderline phone doesn't flip-flop forever.
+      if (++this.adaptGood >= 8) {
+        this.dprCap = Math.min(MAX_DPR, this.dprCap / ADAPT_STEP);
+        this.adaptGood = 0;
+        this.adaptClock = -2;
+        this.onResize();
+      }
+    } else {
+      this.adaptGood = 0;
+    }
+  }
+
 }
 
 // ─── Fullscreen toggle ─────────────────────────────────────
