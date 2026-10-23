@@ -100,37 +100,13 @@ function setPanelVisible(el: HTMLElement, visible: boolean) {
 
 // ─── Shaders ───────────────────────────────────────────────
 
-const ChromaShader = {
+// Chromatic fringe + vignette in ONE full-screen pass (they used to be two passes
+// and an extra render target — the biggest fill cost on a weak phone GPU).
+// Output is identical to running them back to back.
+const GradeShader = {
   uniforms: {
     tDiffuse: { value: null as THREE.Texture | null },
     amount: { value: 0.003 },
-  },
-  vertexShader: /* glsl */ `
-    varying vec2 vUv;
-    void main() {
-      vUv = uv;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }
-  `,
-  fragmentShader: /* glsl */ `
-    uniform sampler2D tDiffuse;
-    uniform float amount;
-    varying vec2 vUv;
-    void main() {
-      vec2 d = amount * (vUv - 0.5);
-      gl_FragColor = vec4(
-        texture2D(tDiffuse, vUv + d).r,
-        texture2D(tDiffuse, vUv).g,
-        texture2D(tDiffuse, vUv - d).b,
-        1.0
-      );
-    }
-  `,
-};
-
-const VignetteShader = {
-  uniforms: {
-    tDiffuse: { value: null as THREE.Texture | null },
     darkness: { value: 1.15 },
     offset: { value: 1.12 },
   },
@@ -143,14 +119,20 @@ const VignetteShader = {
   `,
   fragmentShader: /* glsl */ `
     uniform sampler2D tDiffuse;
+    uniform float amount;
     uniform float darkness;
     uniform float offset;
     varying vec2 vUv;
     void main() {
-      vec4 c = texture2D(tDiffuse, vUv);
-      float d = length((vUv - 0.5) * 2.0);
-      float v = smoothstep(offset, offset - 0.45, d * (darkness + offset));
-      gl_FragColor = vec4(c.rgb * v, 1.0);
+      vec2 d = amount * (vUv - 0.5);
+      vec3 c = vec3(
+        texture2D(tDiffuse, vUv + d).r,
+        texture2D(tDiffuse, vUv).g,
+        texture2D(tDiffuse, vUv - d).b
+      );
+      float dist = length((vUv - 0.5) * 2.0);
+      float v = smoothstep(offset, offset - 0.45, dist * (darkness + offset));
+      gl_FragColor = vec4(c * v, 1.0);
     }
   `,
 };
@@ -1061,11 +1043,11 @@ class AbyssGame {
     );
     if (USE_BLOOM) this.composer.addPass(this.bloomPass);
 
-    this.chromaPass = new ShaderPass(ChromaShader as any);
+    // One pass drives both the chroma fringe (uniforms.amount) and the vignette
+    // (uniforms.darkness/offset); both fields point at it so call sites stay as-is.
+    this.chromaPass = new ShaderPass(GradeShader as any);
+    this.vignettePass = this.chromaPass;
     this.composer.addPass(this.chromaPass);
-
-    this.vignettePass = new ShaderPass(VignetteShader as any);
-    this.composer.addPass(this.vignettePass);
 
     this.buildTunnel();
     this.buildGates();
