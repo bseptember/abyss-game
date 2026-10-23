@@ -52,6 +52,13 @@ const USE_RELATIVE_AIM = matchMedia('(pointer: coarse)').matches || IS_MOBILE;
 const REDUCE_MOTION = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const LOW_POWER = IS_MOBILE || (navigator.hardwareConcurrency ?? 8) <= 4;
 const MAX_DPR = LOW_POWER ? 1.25 : 1.75;
+// Adaptive resolution (phones only): if frames stay slow, step the render scale down
+// toward ADAPT_MIN_DPR; if they recover, step back up. Gameplay is dt-based, so only
+// sharpness changes.
+const ADAPT_MIN_DPR = 0.75;
+const ADAPT_STEP = 0.85;
+const ADAPT_SLOW_FRAME = 1 / 29;    // EMA slower than ~29 fps -> drop a step
+const ADAPT_FAST_FRAME = 1 / 51;    // EMA faster than ~51 fps for a while -> try a step back up
 const TRAIL_COUNT = LOW_POWER ? 180 : 320;
 const STAR_COUNT = LOW_POWER ? 1200 : 2200;
 const USE_BLOOM = !LOW_POWER;
@@ -986,6 +993,13 @@ class AbyssGame {
   private isTransitioning = false;
   private gameOverShown = false;
   private tabHidden = false;
+  private dprCap = MAX_DPR;          // current render-scale cap (lowered by adaptResolution on phones)
+  private frameEma = 1 / 60;
+  private adaptClock = 0;
+  private adaptGood = 0;
+  private adaptDrops = 0;
+  private adaptProbe: number | null = null;  // frame EMA just before the last step down, to check it helped
+  private adaptLocked = false;
 
   // Input
   private pointerX = 0.5;
@@ -1027,7 +1041,7 @@ class AbyssGame {
       powerPreference: 'high-performance',
     });
     this.renderer.setSize(innerWidth, innerHeight);
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, MAX_DPR));
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, this.dprCap));
     this.renderer.setClearColor(0x000008);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
@@ -1480,6 +1494,10 @@ class AbyssGame {
     this.ui.markScoreBest(false);
 
     this.lastTime = performance.now();
+    this.frameEma = 1 / 60;
+    this.adaptClock = -2;                      // ~3 s warm-up: shader compiles and uploads cause start-up stalls
+    this.adaptGood = 0;
+    this.adaptProbe = null;
     this.gameLoop();
   }
 
@@ -1576,6 +1594,7 @@ class AbyssGame {
     const now = performance.now();
     let dt = (now - this.lastTime) / 1000;
     this.lastTime = now;
+    this.adaptResolution(dt);
     dt = Math.min(dt, 0.05);
 
     this.update(dt);
@@ -2008,10 +2027,58 @@ class AbyssGame {
     this.camera.aspect = innerWidth / innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(innerWidth, innerHeight);
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, MAX_DPR));
+    const pr = Math.min(devicePixelRatio, this.dprCap);
+    this.renderer.setPixelRatio(pr);
+    this.composer.setPixelRatio(pr);
     this.composer.setSize(innerWidth, innerHeight);
     if (USE_BLOOM) this.bloomPass.resolution.set(innerWidth, innerHeight);
   }
+
+  /**
+   * Phones only: trade sharpness for frame rate when frames stay slow, and back again.
+   * Each step down has to prove itself: if it doesn't speed frames up (the phone is
+   * limited by something other than fill rate), it is undone and adapting stops.
+   */
+  private adaptResolution(rawDt: number) {
+    if (!LOW_POWER || this.adaptLocked || rawDt > 0.25) return;   // ignore resume / tab-switch hitches
+    this.frameEma += (rawDt - this.frameEma) * 0.08;
+    this.adaptClock += rawDt;
+    if (this.adaptClock < 1) return;           // decide at most once a second
+    this.adaptClock = 0;
+
+    if (this.adaptProbe !== null) {
+      const before = this.adaptProbe;
+      this.adaptProbe = null;
+      if (this.frameEma > before * 0.92) {
+        // Less than 8% faster: resolution isn't the bottleneck. Undo and stop.
+        this.dprCap = Math.min(MAX_DPR, this.dprCap / ADAPT_STEP);
+        this.adaptLocked = true;
+        this.onResize();
+        return;
+      }
+    }
+
+    if (this.frameEma > ADAPT_SLOW_FRAME && this.dprCap > ADAPT_MIN_DPR) {
+      this.adaptProbe = this.frameEma;
+      this.dprCap = Math.max(ADAPT_MIN_DPR, this.dprCap * ADAPT_STEP);
+      this.adaptGood = 0;
+      this.adaptDrops++;
+      this.adaptClock = -2;                    // let the new size settle before judging it
+      this.onResize();
+    } else if (this.frameEma < ADAPT_FAST_FRAME && this.dprCap < MAX_DPR && this.adaptDrops < 3) {
+      // Only climb back after a long stretch of fast frames, and give up after a
+      // few drops so a borderline phone doesn't flip-flop forever.
+      if (++this.adaptGood >= 8) {
+        this.dprCap = Math.min(MAX_DPR, this.dprCap / ADAPT_STEP);
+        this.adaptGood = 0;
+        this.adaptClock = -2;
+        this.onResize();
+      }
+    } else {
+      this.adaptGood = 0;
+    }
+  }
+
 }
 
 // ─── Fullscreen toggle ─────────────────────────────────────
